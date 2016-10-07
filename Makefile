@@ -16,7 +16,7 @@ EXECS = $(XFSM3D) $(XLOC) $(XHOMOG)
 
 #OBJ_COMMON = $(OBJ)/eikonal_utils.o
 OBJ_REQD = $(OBJ)/module.o
-OBJ_COMMON = $(OBJ)/mpiutils.o
+OBJ_COMMON = $(OBJ)/broadcast.o $(OBJ)/h5io.o $(OBJ)/mpiutils.o $(OBJ)/os.o
 OBJHOMOG = $(OBJ_REQD) $(OBJ_COMMON) $(OBJ)/homog.o
 OBJLOC = $(OBJ_REQD) $(OBJ_COMMON) $(OBJ)/locate.o
 OBJ2D = $(OBJ_REQD) $(OBJ_COMMON) $(OBJ)/sweep2d.o
@@ -36,8 +36,14 @@ $(XFSM3D): $(OBJ3D)
 $(XLOC): $(OBJLOC)
 	$(MPIF90) $(FFLAGS) -o $(XLOC) $(OBJLOC) $(LIBALL)
 
+$(OBJ)/broadcast.o: broadcast.c
+	$(MPICC) $(CFLAGS) $(INC_ALL) -c broadcast.c -o $(OBJ)/broadcast.o
+
 $(OBJ)/fsm3d.o: fsm3d.f90
 	$(MPIF90) $(FFLAGS) $(INCF) -c fsm3d.f90 -o $(OBJ)/fsm3d.o
+
+$(OBJ)/h5io.o: h5io.c
+	$(MPICC) $(CFLAGS) $(INC_ALL) -c h5io.c -o $(OBJ)/h5io.o
 
 $(OBJ)/homog.o: homog.c
 	$(MPICC) $(CFLAGS) $(INC_ALL) -c homog.c -o $(OBJ)/homog.o
@@ -47,6 +53,9 @@ $(OBJ)/locate.o: locate.f90
 
 $(OBJ)/module.o: module.F90
 	$(F90) $(FFLAGS) $(INCF) -c module.F90 -o $(OBJ)/module.o
+
+$(OBJ)/os.o: os.c
+	$(CC) $(CFLAGS) $(INC_LOC) -c os.c -o $(OBJ)/os.o
  
 $(OBJ)/mpiutils.o: mpiutils.f90
 	$(MPIF90) $(FFLAGS) $(INCF) -c mpiutils.f90 -o $(OBJ)/mpiutils.o
