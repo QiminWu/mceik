@@ -1,10 +1,10 @@
-#ifndef __MCEIK_STRUCT_H__
-#define __MCEIK_STRUCT_H__
+#ifndef _mceik_struct_h__
+#define _mceik_struct_h__ 1
 
 enum pick_type_enum
 {
-    P_PICK = 1,  /*!< P wave pick */
-    S_PICK = 2   /*!< S wave pick */
+    P_PRIMARY_PICK = 1,  /*!< P first arrival phase pick */
+    S_PRIMARY_PICK = 2,  /*!< S first arrival phase pick */
 };
 
 struct mceik_catalog_struct
@@ -23,23 +23,25 @@ struct mceik_catalog_struct
     int *pickType; /*!< Phase identifier (P=1) or (S=2) for i'th observation
                         [obsptr[nevents-1] */
     int *statPtr;  /*!< Maps from the i'th observation to the station 
-                        information */
+                        information [obsptr[nevents-1]] */
     int *obsPtr;   /*!< Maps from i'th event to start of observations
                         [nevents + 1]*/
     int nevents;   /*!< Number of events */
 };
 
-struct mceik_station_struct
+struct mceik_stations_struct
 {
-    char *netw[64];  /*!< Network code [nstat] */
-    char *stnm[64];  /*!< Station name [nstat] */
-    char *chan[64];  /*!< Channel (e.g. BH?) [nstat] */
-    char *loc[64];   /*!< Location code [nstat] */
+    char **netw;     /*!< Network code [nstat] */
+    char **stnm;     /*!< Station name [nstat] */
+    char **chan;     /*!< Channel (e.g. BH?) [nstat] */
+    char **loc;      /*!< Location code [nstat] */
     double *xrec;    /*!< x station ordinate (m) or longitude (deg) [nstat] */
     double *yrec;    /*!< y station ordinate (m) or latitude (deg) [nstat] */
     double *zrec;    /*!< z station elevation (m) above base of model [nstat] */
     double *pcorr;   /*!< P static correction (s) [nstat] */
     double *scorr;   /*!< S static correction (s) [nstat] */
+    int *lhasP;      /*!< If 1 then the i'th station has P-picks [nstat] */
+    int *lhasS;      /*!< If 1 then the i'th station has S-picks [nstat] */
     int nstat;       /*!< Number of sites */
     int lcartesian;  /*!< If 1 this is a cartesian system */
 };

@@ -51,10 +51,12 @@
             INTEGER(C_INT), INTENT(OUT) :: ierr
             END SUBROUTINE MPIUTILS_INITIALIZE2D
 
-            SUBROUTINE MPIUTILS_GRD2IJK(igrd, nx, ny, nz, i, j, k, ierr)
+            SUBROUTINE MPIUTILS_GRD2IJK(igrd, nx, ny, nz, i, j, k, ierr) &
+                       BIND(C, NAME='mpiutils_grd2ijk')
+            USE ISO_C_BINDING
             IMPLICIT NONE 
-            INTEGER, INTENT(IN) :: igrd, nx, ny, nz
-            INTEGER, INTENT(OUT) :: i, j, k, ierr
+            INTEGER(C_INT), INTENT(IN) :: igrd, nx, ny, nz
+            INTEGER(C_INT), INTENT(OUT) :: i, j, k, ierr
             END SUBROUTINE MPIUTILS_GRD2IJK
 
          END INTERFACE
@@ -288,7 +290,6 @@
 
             SUBROUTINE EIKONAL_EXCHANGE_BLOCKING(comm, ghosts, u)
             USE EIKONAL3D_TYPES, ONLY : ghostType
-            USE MPI
             IMPLICIT NONE
             INTEGER, INTENT(IN) :: comm
             TYPE(ghostType), DIMENSION(:), INTENT(INOUT) :: ghosts

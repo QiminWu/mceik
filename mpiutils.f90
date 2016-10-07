@@ -243,10 +243,12 @@
 !>
 !>    @copyright Apache 2 license
 !>
-      SUBROUTINE MPIUTILS_GRD2IJK(igrd, nx, ny, nz, i, j, k, ierr)
+      SUBROUTINE MPIUTILS_GRD2IJK(igrd, nx, ny, nz, i, j, k, ierr) &
+                 BIND(C, NAME='mpiutils_grd2ijk')
+      USE ISO_C_BINDING
       IMPLICIT NONE
-      INTEGER, INTENT(IN) :: igrd, nx, ny, nz
-      INTEGER, INTENT(OUT) :: i, j, k, ierr 
+      INTEGER(C_INT), INTENT(IN) :: igrd, nx, ny, nz
+      INTEGER(C_INT), INTENT(OUT) :: i, j, k, ierr 
       INTEGER nxy
       ierr = 0
       nxy = nx*ny

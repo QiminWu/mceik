@@ -850,7 +850,6 @@ my_sweepid = 0
 !>    @copyright Apache 2 license
 !>
       SUBROUTINE EIKONAL_GRD2IJK(igrd, nx, ny, nz, i, j, k, ierr)
-      USE MPIUTILS_MODULE, ONLY : MPIUTILS_GRD2IJK
       IMPLICIT NONE
       INTEGER, INTENT(IN) :: igrd, nx, ny, nz
       INTEGER, INTENT(OUT) :: i, j, k, ierr

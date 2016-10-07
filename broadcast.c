@@ -21,6 +21,14 @@ void broadcast_stations(MPI_Comm comm, const int root,
     MPI_Bcast(&stations->nstat,      1, MPI_INT, root, comm);
     MPI_Bcast(&stations->lcartesian, 1, MPI_INT, root, comm); 
     if (stations->nstat < 1){return;}
+    // Arrays
+    if (myid != root)
+    {
+        stations->lhasP = (int *)calloc((size_t) stations->nstat, sizeof(int));
+        stations->lhasS = (int *)calloc((size_t) stations->nstat, sizeof(int));
+    }
+    MPI_Bcast(stations->lhasP, stations->nstat, MPI_INT, root, comm);
+    MPI_Bcast(stations->lhasS, stations->nstat, MPI_INT, root, comm);
     // Doubles
     if (myid != root)
     {
