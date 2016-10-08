@@ -352,6 +352,7 @@ my_sweepid = 0
       model_loc%nx = 0
       model_loc%ny = 0
       model_loc%nz = 0
+      model_loc%nxyz = 0
       model_loc%myblock = 0
       RETURN
       END
@@ -626,12 +627,12 @@ my_sweepid = 0
       DOUBLE PRECISION, INTENT(IN) :: a, b, fijh
       DOUBLE PRECISION xbar, amb, arg
       amb = a - b
-      IF (ABS(amb) >= fijh) THEN
-         xbar = MIN(a, b) + fijh
-      ELSE
+      IF (ABS(amb) < fijh) THEN
          arg  =  two*fijh*fijh - amb*amb
          xbar = half*(a + b + SQRT(arg))
-      ENDIF 
+      ELSE
+         xbar = MIN(a, b) + fijh
+      ENDIF
       solve_hamiltonian2D = xbar
       RETURN
       END
@@ -660,16 +661,10 @@ my_sweepid = 0
       IF (a1 == u_nan) RETURN
       ! p == 1
       xtilde = a1 + fijkh
-      IF (xtilde <= a2) THEN
-         solve_hamiltonian3d = xtilde
-         RETURN
-      ELSE
+      IF (xtilde > a2) THEN
          ! Set p == 2 and solve (x - a1)^2 + (x - a2)^2 = fij^2 h^2
          xtilde = SOLVE_HAMILTONIAN2D(a1, a2, fijkh)
-         IF (xtilde <= a3) THEN
-            solve_hamiltonian3d = xtilde
-            RETURN
-         ELSE
+         IF (xtilde > a3) THEN
             ! Set p == 3 and solve 
             ! (x - a1)^2 + (x - a2)^2 + (x - a3)^2 = fij^2 h^2 
             ! 3x**2 - 2x(a1 + a2 + a3) + a1^2 + a2^2 + a3^3 - fij^2 h^2 = 0
@@ -677,7 +672,7 @@ my_sweepid = 0
             qc = (a1*a1 + a2*a2 + a3*a3 - fijkh*fijkh)*third
             disc = qb*qb  - four*qc
             ! Complex root
-            IF (disc < zero) ierr = 1 
+            IF (disc < zero) ierr = 1
             xtilde = half*(-qb + SQRT(disc))
             ! Negative traveltime
             IF (xtilde < zero) ierr = 2
@@ -685,7 +680,13 @@ my_sweepid = 0
                solve_hamiltonian3d = xtilde
                RETURN
             ENDIF
+         ELSE
+            solve_hamiltonian3d = xtilde
+            RETURN
          ENDIF
+      ELSE
+         solve_hamiltonian3d = xtilde
+         RETURN
       ENDIF
       ierr = 3
       RETURN
@@ -1119,6 +1120,7 @@ my_sweepid = 0
       model_loc%nx = nx_loc
       model_loc%ny = ny_loc
       model_loc%nz = nz_loc
+      model_loc%nxyz = nxyz_loc 
       model_loc%ix1 = ix1
       model_loc%iy1 = iy1
       model_loc%iz1 = iz1
@@ -1242,7 +1244,7 @@ my_sweepid = 0
                      RETURN
                   ENDIF 
                   ! not a critical error but really should be ordered
-                  IF (K > 1) THEN
+                  IF (k > 1) THEN
                      IF (ghosts(j)%irecv_dest(k-1) >= &
                          ghosts(j)%irecv_dest(k)) PRINT *, 'out of order!'
                   ENDIF
@@ -1823,6 +1825,43 @@ my_sweepid = 0
       DEALLOCATE(model_loc%u)
       RETURN
       END
+!                                                                                        !
+!========================================================================================!
+!                                                                                        !
+!>    @brief Extracts the single precision local traveltime time model from model_loc
+!>
+!>    @param[in] nloc      size of ttimes4
+!>
+!>    @param[out] ttimes4  traveltimes (s) from source to each point in medium [nloc]
+!>    @param[out] ierr     0 indicates success
+!>
+!>    @author Ben Baker
+!>
+!>    @copyright Apache 2
+!>
+      SUBROUTINE EIKONAL3D_GET_LOCAL_TTIMES4(nloc, ttimes4, ierr)
+      USE EIKONAL3D_MODULE, ONLY : model_loc
+      USE ISO_C_BINDING
+      IMPLICIT NONE
+      INTEGER(C_INT), INTENT(IN) :: nloc
+      REAL(C_FLOAT), INTENT(OUT) :: ttimes4(nloc)
+      INTEGER(C_INT), INTENT(OUT) :: ierr
+      INTEGER i
+      ierr = 0
+      IF (nloc < model_loc%nxyz) THEN
+         WRITE(*,*) 'eikonal_gettimes_sngl: Insufficient space in output'
+         ierr = 1
+         RETURN
+      ENDIF
+!$OMP DO SIMD
+      DO 1 i=1,model_loc%nxyz
+         ttimes4(i) = SNGL(model_loc%u(i)) 
+    1 CONTINUE
+!$OMP END DO SIMD NOWAIT
+      RETURN
+      END
+
+
 !                                                                                        !
 !========================================================================================!
 !                                                                                        !

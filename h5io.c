@@ -304,11 +304,11 @@ int eikonal_h5io_initialize(const MPI_Comm comm,
                 strcpy(dataSetName, groupName);
                 if (iphase == 1)
                 {
-                    strcat(dataSetName, "/PTravelTimeTable\0");
+                    strcat(dataSetName, "/PTravelTimes\0");
                 }
                 else
                 {
-                    strcat(dataSetName, "/STravelTimeTable\0");
+                    strcat(dataSetName, "/STravelTimes\0");
                 }
                 dataSetID = H5Dcreate(*tttFileID, dataSetName,
                                       H5T_NATIVE_FLOAT,
@@ -351,93 +351,143 @@ int eikonal_h5io_initialize(const MPI_Comm comm,
 }
 //============================================================================//
 /*!
- * @param[in] ix0       processes first global x index in grid
- * @param[in] iy0       processes first global y index in grid
- * @param[in] iz0       processes first global z index in grid
- * @param[in] nx        number of global x grid points
- * @param[in] ny        number of global y grid points
- * @param[in] nz        number of global z grid points
+ * @brief Writes the traveltimes computed on this communicator to the
+ *        tttfileID HDF5 file.  If a dataset exists then it will be
+ *        overwritten.
+ *
+ * @param[in] comm       MPI communicator
+ * @param[in] tttfileID  HDF5 traveltime file handle.  The file must be
+ *                       opened in read/write mode. 
+ * @param[in] station    staion number
+ * @param[in] model      earth model number
+ * @param[in] iphase     if 1 then this is a P phase.
+ *                       if 2 then this is an S phase.
+ * @param[in] ix0        processes first global x index in grid
+ * @param[in] iy0        processes first global y index in grid
+ * @param[in] iz0        processes first global z index in grid
+ * @param[in] nx         number of global x grid points in entire domain.
+ * @param[in] ny         number of global y grid points in entire domain.
+ * @param[in] nz         number of global z grid points in entire domain.
+ * @param[in] nxLoc      number of local x grid points.
+ * @param[in] nyLoc      number of local y grid points.
+ * @param[in] nzLoc      number of local z grid points.
+ * @param[in] ttimes     traveltimes to write [nzLoc x nyLoc x nxLoc]
+ *
+ * @result 0 indicates success
+ *
+ * @author Ben Baker
+ *
+ * @copyright Apache 2
  *
  */
 int eikonal_h5io_writeTravelTimes(const MPI_Comm comm,
-                             const int station, const int model,
-                             const bool isP,
-                             const hid_t tttFileID,
-                             const int ix0, const int iy0, const int iz0,
-                             //const int nx, const int ny, const int nz,
-                             const int nxLoc, const int nyLoc, const int nzLoc,
-                             const float *__restrict__ ttimes)
+                                  const hid_t tttFileID,
+                                  const int station, const int model,
+                                  const int iphase,
+                                  const int ix0, const int iy0, const int iz0,
+                                  const int nxLoc, const int nyLoc,
+                                  const int nzLoc,
+                                  const float *__restrict__ ttimes)
 {
     const char *fcnm = "eikonal_h5io_writeTravelTimes\0";
     char dataSetName[512];
-    hsize_t block[3], count[3], dimsLocal[3], offset[3], stride[3];
-    hid_t dataSetID, globalDataSpace, localDataSpace, plistID;
+    hid_t dataSetID, dataSpace, memSpace, plistID;
+    hsize_t dimsLocal[3], block[3];
+    hsize_t count[3] = {1, 1, 1};
+    hsize_t stride[3] = {1, 1, 1};
+    hsize_t offset[3] = {iz0, iy0, ix0};
     herr_t status;
-    const int rank = 3; // Data is 3D
+    int i, indx, j, jndx, k, nxMax, nyMax, nzMax;
+    bool isP;
+    const int rank = 3;
+    float *data;
+    //------------------------------------------------------------------------//
+    //
     // Make the dataset name and check that it exists
     status = 0;
+    isP = true;
+    if (iphase == 2){isP = false;}
     eikonal_h5io_setTravelTimeName(model, station, isP, dataSetName);
     if (H5Lexists(tttFileID, dataSetName, H5P_DEFAULT) != 1)
     {
         printf("%s: Error dataset %s doesn't exist\n", fcnm, dataSetName);
         return -1;
     }
-    // Set the global size and local dataspaces 
-    //dimsGlobal[0] = nz;
-    //dimsGlobal[1] = ny;
-    //dimsGlobal[2] = nx;
-    dimsLocal[0] = nzLoc;
-    dimsLocal[1] = nyLoc;
-    dimsLocal[2] = nxLoc;
-    //globalDataSpace = H5Screate_simple(rank, dimsGlobal, NULL);
-    localDataSpace  = H5Screate_simple(rank, dimsLocal,  NULL); 
-    // Open the chunked dataset 
-/*
-    plist_id = H5Pcreate(H5P_DATASET_CREATE);
-    status = H5Pset_chunk(plistID, rank, dimsLocal);
-    globalDataSpace = H5Dget_space(dataSetID);
-    dataSetID = H5Dcreate(fileID, cDataName, H5T_NATIVE_FLOAT,
-                          globalDataSpace, H5P_DEFAULT, plistID,
-                          H5P_DEFAULT); 
-    H5Pclose(plistID);
-    H5Sclose(globalDataSpace); 
-*/
+    // Get the chunk sizes 
+    MPI_Allreduce(&nzLoc, &nzMax, 1, MPI_INTEGER, MPI_MAX, comm);
+    MPI_Allreduce(&nyLoc, &nyMax, 1, MPI_INTEGER, MPI_MAX, comm);
+    MPI_Allreduce(&nxLoc, &nxMax, 1, MPI_INTEGER, MPI_MAX, comm);
+    dimsLocal[0] = nzMax;
+    dimsLocal[1] = nyMax;
+    dimsLocal[2] = nxMax;
+    block[0] = nzMax;
+    block[1] = nyMax;
+    block[2] = nxMax;
+    // Set the data
+    data = (float *)calloc(nxMax*nyMax*nzMax, sizeof(float));
+    for (k=0; k<nzLoc; k++)
+    {   
+        for (j=0; j<nyLoc; j++)
+        {   
+            for (i=0; i<nxLoc; i++)
+            {   
+                indx = k*nxMax*nyMax + j*nxMax + i;
+                jndx = k*nxLoc*nyLoc + j*nxLoc + i;
+                data[indx] = ttimes[jndx];
+            }   
+        }   
+    }
+    // Open the memory spaces
+    memSpace  = H5Screate_simple(rank, dimsLocal,  NULL);
+    // Open the dataset
+    dataSetID = H5Dopen2(tttFileID, dataSetName, H5P_DEFAULT);
     // Open the chunked dataset
-    dataSetID = H5Dopen(tttFileID, dataSetName, H5P_DEFAULT);
-    globalDataSpace = H5Dget_space(dataSetID);
-    // Set the local positions - each process defines dataset in memory
-    // and writes it to the hyperslab in the file.  count and block are
-    // interchanged so that each process writes 1 continuous block in x,
-    // y, and z
-    count[0] = 1;
-    count[1] = 1;
-    count[2] = 1;
-    stride[0] = 1; // Unit stride in x
-    stride[1] = 1; // Unit stride in y
-    stride[2] = 1; // Unit stride in z
-    block[0] = dimsLocal[0]; // local x grid points 
-    block[1] = dimsLocal[1]; // local y grid points
-    block[2] = dimsLocal[2]; // local z grid points
-    offset[0] = iz0; // global x start location
-    offset[1] = iy0; // global y start location
-    offset[2] = ix0; // global z start location
-    // Select hyperslab in the file
-    status = H5Sselect_hyperslab(globalDataSpace, H5S_SELECT_SET,
-                                 offset, stride, count, block);
-    // Create property list for collective dataset write
-    plistID = H5Pcreate(H5P_DATASET_XFER);
-    status = H5Dwrite(dataSetID, H5T_NATIVE_FLOAT, localDataSpace,
-                      globalDataSpace, plistID, ttimes);  
-    // Close it up
-    status += H5Pclose(plistID);
-    status += H5Sclose(globalDataSpace);
-    status += H5Sclose(localDataSpace);
-    status += H5Dclose(dataSetID);
+    dataSpace = H5Dget_space(dataSetID);
+    // Select hyperslab in file
+    status = H5Sselect_hyperslab(dataSpace, H5S_SELECT_SET, offset,
+                                 stride, count, block);
     if (status < 0)
     {
-        printf("%s: Failed to write dataset %s\n", fcnm, dataSetName);
+        printf("%s: Error selecting hyperslab!\n", fcnm);
+        return -1;
+    }
+    // Create a property list for collective dataset write
+    plistID = H5Pcreate(H5P_DATASET_XFER);
+    H5Pset_dxpl_mpio(plistID, H5FD_MPIO_COLLECTIVE);
+    // Write the data
+    status = H5Dwrite(dataSetID, H5T_NATIVE_FLOAT, memSpace,
+                      dataSpace, plistID, data);
+    if (status < 0)
+    {
+        printf("%s: Error writing dataset: %s!\n", fcnm, dataSetName);
+        return -1;
+    }
+    // Free space
+    free(data);
+    status = H5Pclose(plistID);
+    if (status < 0)
+    {
+        printf("%s: Error closing plistID\n", fcnm);
+        return -1;
+    }
+    status = H5Sclose(dataSpace);
+    if (status < 0)
+    {
+        printf("%s: Error closing dataSpace\n", fcnm);
         return -1;
     } 
+    status = H5Dclose(dataSetID);
+    if (status < 0)
+    {
+        printf("%s: Error closing dataSetID\n", fcnm);
+        return -1;
+    }
+    status = H5Sclose(memSpace);
+    if (status < 0)
+    {
+        printf("%s: Error closing memSpace\n", fcnm);
+        return -1;
+    }
     return 0;
 }
 //============================================================================//

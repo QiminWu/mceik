@@ -89,6 +89,7 @@
             INTEGER nx   !> number of local x locations
             INTEGER ny   !> number of local y locations
             INTEGER nz   !> number of local z locations
+            INTEGER nxyz !> number of local grid points
             INTEGER ix1  !> first global x node index of my local model
             INTEGER iy1  !> first global y node index of my local model
             INTEGER iz1  !> first global z node index of my local model
@@ -267,6 +268,14 @@
             DOUBLE PRECISION, DIMENSION(:), INTENT(INOUT) :: u
             INTEGER, INTENT(OUT) :: ierr
             END SUBROUTINE EIKONAL3D_FSM_MPI
+
+            SUBROUTINE EIKONAL3D_GET_LOCAL_TTIMES4(nloc, ttimes4, ierr)
+            USE ISO_C_BINDING
+            IMPLICIT NONE
+            INTEGER(C_INT), INTENT(IN) :: nloc
+            REAL(C_FLOAT), INTENT(OUT) :: ttimes4(nloc)
+            INTEGER(C_INT), INTENT(OUT) :: ierr
+            END SUBROUTINE EIKONAL3D_GET_LOCAL_TTIMES4
 
             SUBROUTINE EIKONAL_INIT_GRID(nx, isx, x0, dx, xs, ixloc, ierr)
             IMPLICIT NONE
