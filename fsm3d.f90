@@ -562,12 +562,20 @@ my_sweepid = 0
       IMPLICIT NONE
       DOUBLE PRECISION, INTENT(IN) :: a, b, c
       DOUBLE PRECISION, INTENT(OUT) :: a1, a2, a3
+      LOGICAL lab, lac, lbc
       !----------------------------------------------------------------------------------!
       !
+      ! compute comparisons
+      lab = .TRUE.
+      lac = .TRUE.
+      lbc = .TRUE.
+      IF (a > b) lab = .FALSE.
+      IF (a > c) lac = .FALSE.
+      IF (b > c) lbc = .FALSE.
       ! sort input - a is the smallest 
-      IF (a <= b .AND. a <= c) THEN
+      IF (lab .AND. lac) THEN !a <= b .AND. a <= c) THEN
          ! a <= b <= c
-         IF (b <= c) THEN
+         IF (lbc) THEN !b <= c) THEN
             a1 = a
             a2 = b
             a3 = c
@@ -577,9 +585,9 @@ my_sweepid = 0
             a3 = b
          ENDIF
       ! b is the smallest
-      ELSEIF (b <= a .AND. b <= c) THEN
+      ELSEIF (.NOT. lab .AND. lbc) THEN !b <= a .AND. b <= c) THEN
          ! b <= a <= c
-         IF (a <= c) THEN
+         IF (lac) THEN !a <= c) THEN
             a1 = b
             a2 = a
             a3 = c
@@ -591,7 +599,7 @@ my_sweepid = 0
       ! c is the smallest
       ELSE
          ! c <= a <= b
-         IF (a <= b) THEN
+         IF (lab) THEN !a <= b) THEN
             a1 = c
             a2 = a
             a3 = b
