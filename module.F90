@@ -413,9 +413,38 @@
             DOUBLE PRECISION, ALLOCATABLE :: xlocs(:)
             DOUBLE PRECISION, ALLOCATABLE :: ylocs(:)
             DOUBLE PRECISION, ALLOCATABLE :: zlocs(:)
+            INTEGER ix0
+            INTEGER iy0
+            INTEGER iz0
+            INTEGER nx
+            INTEGER ny
+            INTEGER nz
+            INTEGER nxLoc
+            INTEGER nyLoc
+            INTEGER nzLoc
             INTEGER ngrd
          END TYPE locateType
       END MODULE LOCATE_TYPES
+
+      MODULE H5IO_MODULE
+         INTERFACE
+            SUBROUTINE H5IO_READ_TRAVELTIMESF(comm, tttFileID,        &
+                                              station, model, iphase, &
+                                              ix0f, iy0f, iz0f,       &
+                                              nxLoc, nyLoc, nzLoc,    &
+                                              ttimes, ierr)           &
+                       BIND(C, NAME='eikonal_h5io_readTraveltimesF')
+            USE ISO_C_BINDING
+            IMPLICIT NONE
+            INTEGER(C_INT), INTENT(IN) :: comm, ix0f, iy0f, iz0f, &
+                                          iphase, model,          &
+                                          nxLoc, nyLoc, nzLoc,    &
+                                          station, tttFileID
+            REAL(C_FLOAT), INTENT(OUT) :: ttimes(nxLoc*nyLoc*nzLoc)
+            INTEGER(C_INT), INTENT(OUT) :: ierr
+            END SUBROUTINE H5IO_READ_TRAVELTIMESF
+         END INTERFACE
+      END MODULE H5IO_MODULE
 
       MODULE LOCATE_MODULE
          USE CONSTANTS_MODULE, ONLY : one, sqrt2i, two, zero

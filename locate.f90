@@ -115,20 +115,30 @@
       DEALLOCATE(xopt) 
       RETURN
       END
-
-      SUBROUTINE LOCATE_GRIDSEARCH_MPI(job, ngrd, nobs, nsrc, nwt, tori, wtobs, tobs, hypo )
+!                                                                                        !
+!========================================================================================!
+!                                                                                        !
+      SUBROUTINE LOCATE_GRIDSEARCH_MPI(tttFileID, model, &
+                                       job, ngrd, nobs, nsrc, nwt, &
+                                       tori, wtobs, tobs,          &
+                                       hypo, ierr)
       USE MPI
+      USE H5IO_MODULE, ONLY : H5IO_READ_TRAVELTIMESF
       USE LOCATE_MODULE, ONLY : COMPUTE_LOCATION_ONLY,            &
                                 COMPUTE_LOCATION_AND_ORIGIN_TIME, &
                                 COMPUTE_LOCATION_AND_STATICS,     &
                                 COMPUTE_LOCATION_ALL, zero, sqrt2i
+      USE LOCATE_TYPES, ONLY : locateType
       USE ISO_C_BINDING
+      INTEGER(C_INT), INTENT(IN) :: model, tttFileID
       REAL(C_DOUBLE), INTENT(IN) :: tori(nsrc), wtobs(nwt), tobs(nsrc*nobs)
       REAL(C_DOUBLE), INTENT(OUT) :: hypo(4*nsrc)
+      INTEGER(C_INT), INTENT(OUT) :: ierr
       DOUBLE PRECISION, ALLOCATABLE :: pdf(:), pdfbuf(:)
       REAL, ALLOCATABLE :: test4(:)
       DOUBLE PRECISION res, t0, tobs_i, wt_i, wt_i_sqrt2i
       INTEGER, PARAMETER :: master = 0
+TYPE(locateType) :: locate
       ierr = 0
       hypo(1:4*nsrc) = zero
       nobs_groups = 1
@@ -142,20 +152,25 @@
       ALLOCATE(test4(ngrd))
       pdf(:) = zero
       pdfbuf(:) = zero
-      ! classify the job - this takes the location
+      ! classify the job
       IF (job == COMPUTE_LOCATION_ONLY) THEN
          DO 1 isrc=1,nsrc
             hypo(4*(isrc - 1)+1) = tori(isrc)
             t0 = tori(isrc)
-            ! stack the observations
+            ! stack the residuals for this event
             DO 2 iobs=1,nobs,nobs_groups
                ! load test4 from disk
+               CALL H5IO_READ_TRAVELTIMESF(MPI_COMM_WORLD, tttFileID, &
+                                           iobs, model, iphase,       &
+                                           locate%ix0, locate%iy0, locate%iz0,          &
+                                           locate%nxLoc, locate%nyLoc, locate%nzLoc,    &
+                                           test4, ierr) 
                IF (ierr /= 0) THEN
                   WRITE(*,*) 'Error reading observed traveltimes'
                   GOTO 500
                ENDIF
                ! set the observations and weights 
-               tobs_i = tobs(iobs) - t0  ! `fix' the origin time 
+               tobs_i = tobs(iobs) - t0  ! remove the origin time (increases precision)
                wt_i = wtobs(iobs)
                wt_i_sqrt2i = wt_i*sqrt2i ! accounts for 1/2 scaling in L2 norm
                ! sum the residuals on the grid 
@@ -257,6 +272,15 @@ pdf(:) = pdfbuf(:)
       ny_loc = i2 - i1 + 1
       nz_loc = i2 - i1 + 1
       locate%ngrd = nx_loc*ny_loc*nz_loc
+      locate%nxLoc = nx_loc
+      locate%nyLoc = ny_loc
+      locate%nzLoc = nz_loc
+      locate%nx = nx
+      locate%ny = ny
+      locate%nz = nz
+      locate%ix0 = i1
+      locate%iy0 = j1
+      locate%iz0 = k1
       ALLOCATE(locate%l2g_node(locate%ngrd))
       ALLOCATE(locate%xlocs(locate%ngrd))
       ALLOCATE(locate%ylocs(locate%ngrd))

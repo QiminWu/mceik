@@ -353,9 +353,35 @@ int main(int argc, char **argv)
             printf("%s: Failed writing traveltimes %d\n", fcnm, myid);
             MPI_Abort(MPI_COMM_WORLD, 30);
         }
+        // Verify
+        memset(ttimes4, 0, (size_t) (nxLoc*nyLoc*nzLoc)*sizeof(float));
+        ierr = eikonal_h5io_readTravelTimes(MPI_COMM_WORLD,
+                                            tttFileID,
+                                            k, model,
+                                            iphase,
+                                            ix0, iy0, iz0,
+                                            nxLoc, nyLoc, nzLoc,
+                                            ttimes4);
+        if (ierr != 0)
+        {
+            printf("%s: Error loading traveltimes\n", fcnm);
+            MPI_Abort(MPI_COMM_WORLD, 30);
+        }
+        double difMax = 0.0;
+        int in;
+        for (in=0; in<nxLoc*nyLoc*nzLoc; in++)
+        {
+            difMax = fmax(difMax, fabs(ttimes4[in] - (float) ttimes[in]));
+        }
+        if (difMax > 1.e-5)
+        {
+            printf("%s: Failed to read/write traveltime verification\n", fcnm);
+            MPI_Abort(MPI_COMM_WORLD, 30);
+        }
         free(ttimes4);
     }
     free(ttimes);
+    // I am now ready to locate some earthquakes
 
     // Finalize
     eikonal_h5io_finalize(MPI_COMM_WORLD, &tttFileID);
