@@ -17,8 +17,8 @@ EXECS = $(XFSM3D) $(XLOC) $(XHOMOG)
 #OBJ_COMMON = $(OBJ)/eikonal_utils.o
 OBJ_REQD = $(OBJ)/module.o
 OBJ_COMMON = $(OBJ)/broadcast.o $(OBJ)/h5io.o $(OBJ)/mpiutils.o $(OBJ)/os.o
-OBJHOMOG = $(OBJ_REQD) $(OBJ_COMMON) $(OBJ)/homog.o
-OBJLOC = $(OBJ_REQD) $(OBJ_COMMON) $(OBJ)/locate.o
+OBJ_LOC = $(OBJ)/locate.o
+OBJHOMOG = $(OBJ_REQD) $(OBJ_COMMON) $(OBJ_LOC) $(OBJ)/homog.o
 OBJ2D = $(OBJ_REQD) $(OBJ_COMMON) $(OBJ)/sweep2d.o
 OBJ3D = $(OBJ_REQD) $(OBJ_COMMON) $(OBJ)/fsm3d.o
 

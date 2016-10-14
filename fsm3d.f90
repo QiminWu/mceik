@@ -1587,6 +1587,7 @@ my_sweepid = 0
                                       ierr)                       &
                  BIND(C, NAME='eikonal3d_initialize')
       USE MPI
+      USE MPIUTILS_MODULE, ONLY : MPIUTILS_INITIALIZE3D, linitComm
       USE EIKONAL3D_MODULE, ONLY : ghosts, leik_init, model_loc, parms
       USE EIKONAL3D_MODULE, ONLY : EIKONAL3D_GHOST_COMM, &
                                    MAKE_LEVEL_STRUCT
@@ -1599,6 +1600,8 @@ my_sweepid = 0
       ! local variables
       INTEGER mpierr, myid
       INTEGER, PARAMETER :: master = 0
+      INTEGER, PARAMETER :: ireord = 1
+      INTEGER, PARAMETER :: iwt = 0
       !----------------------------------------------------------------------------------!
       CALL MPI_COMM_RANK(comm, myid, mpierr)
       IF (myid == master) THEN
@@ -1634,6 +1637,16 @@ my_sweepid = 0
       CALL MPI_BCAST(parms%z0,       1, MPI_DOUBLE_PRECISION, master, comm, mpierr)
       CALL MPI_BCAST(parms%h,        1, MPI_DOUBLE_PRECISION, master, comm, mpierr)
       CALL MPI_BCAST(parms%tol,      1, MPI_DOUBLE_PRECISION, master, comm, mpierr)
+      IF (.NOT.linitComm) THEN
+         IF (myid == master) WRITE(*,*) 'eikonal3d_initialize: Splitting communicator...'
+         CALL MPIUTILS_INITIALIZE3D(comm, ireord, iwt,                     &
+                                    parms%ndivx, parms%ndivy, parms%ndivz, &
+                                    ierr)
+         IF (ierr /= 0) THEN
+            WRITE(*,*) 'eikonal3d_initialize: Error splitting communicator'
+            RETURN
+         ENDIF
+      ENDIF
       IF (myid == master) THEN
          WRITE(*,*) 'eikonal3d_initialize: Generating ghost communication structure...'
       ENDIF

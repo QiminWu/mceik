@@ -9,6 +9,7 @@
 #include "mceik_struct.h"
 #include "mceik_broadcast.h"
 #include "mpiutils.h"
+#include "locate.h"
 #include "h5io.h"
 
 
@@ -30,6 +31,9 @@ float *double2FloatArray(const int n, double *__restrict__ x);
 int main(int argc, char **argv)
 {
     const char *fcnm = "xhomog\0";
+    const char *projnm = "homog\0";
+    char ttimeScratchFile[PATH_MAX];
+    MPI_Comm globalComm, intraTableComm, interTableComm;
     struct mceik_catalog_struct catalog;
     struct mceik_stations_struct stations;
     double *ttimes;
@@ -43,6 +47,7 @@ int main(int argc, char **argv)
         nevents, nmodels, nxrec, nyrec,
         ndivx, ndivy, ndivz, ndx, ndy, ndz, nkeep, ntables,
         nwork, nxLoc, nyLoc, nzLoc;
+    int globalCommInt, intraTableCommInt, interTableCommInt;
     bool lsaveScratch;
     hid_t tttFileID;
     const double const_vp = 2000.0; // Slower is harder for the solver
@@ -51,6 +56,8 @@ int main(int argc, char **argv)
     const double varVs = 0.25;
     const int master = 0;
     const int model = 1;
+    const int ireord = 1; // Reorder the communicator
+    const int iwt = 1;    // Use heuristic waiting 
     //------------------------------------------------------------------------//
     //
     // Initialize mpi
@@ -79,6 +86,27 @@ int main(int argc, char **argv)
     nx = (int) ((x1 - x0)/dx + 0.5) + 1;
     ny = (int) ((y1 - y0)/dy + 0.5) + 1;
     nz = (int) ((z1 - z0)/dz + 0.5) + 1;
+    if (myid == master){printf("%s: Splitting the commuicator...\n", fcnm);}
+    globalCommInt = (int) (MPI_Comm_c2f(MPI_COMM_WORLD));
+    mpiutils_initialize3d(&globalCommInt, &ireord, &iwt,
+                          &ndivx, &ndivy, &ndivz, &ierr);
+    if (ierr != 0)
+    {
+        printf("%s: Error splitting the communicators!\n", fcnm);
+        MPI_Abort(MPI_COMM_WORLD, 30);
+    }
+    // get the communicator IDs
+    mpiutils_getCommunicators(&globalCommInt, &intraTableCommInt,
+                              &interTableCommInt, &ierr);
+    if (ierr != 0)
+    {
+        printf("%s: Error getting communicators\n", fcnm);
+        MPI_Abort(MPI_COMM_WORLD, 30);
+    }
+    globalComm = MPI_Comm_f2c((MPI_Fint) globalCommInt);
+    intraTableComm = MPI_Comm_f2c((MPI_Fint) intraTableCommInt);
+    interTableComm = MPI_Comm_f2c((MPI_Fint) interTableCommInt);
+    MPI_Barrier(globalComm);
     if (myid == master)
     {
         srand(2016);
@@ -258,9 +286,13 @@ int main(int argc, char **argv)
     z0Loc = z0 + iz0*dz;
 
     // Initialize the HDF5 traveltime file
-    ierr = eikonal_h5io_initialize(MPI_COMM_WORLD,
+    int myTableID;
+    MPI_Comm_rank(interTableComm, &myTableID);
+    memset(ttimeScratchFile, 0, sizeof(ttimeScratchFile));
+    sprintf(ttimeScratchFile, "%s_%d", projnm, myTableID+1); 
+    ierr = eikonal_h5io_initialize(intraTableComm, //MPI_COMM_WORLD,
                                    "./\0",
-                                   "test\0",
+                                   ttimeScratchFile, //"test\0",
                                    ix0, iy0, iz0,
                                    nx, ny, nz,
                                    nxLoc, nyLoc, nzLoc,
@@ -341,7 +373,7 @@ int main(int argc, char **argv)
         // Convert to float
         ttimes4 = double2FloatArray(nxLoc*nyLoc*nzLoc, ttimes);
         // Save the data
-        ierr = eikonal_h5io_writeTravelTimes(MPI_COMM_WORLD,
+        ierr = eikonal_h5io_writeTravelTimes(intraTableComm, //MPI_COMM_WORLD,
                                              tttFileID,
                                              k, model,   
                                              iphase,
@@ -355,7 +387,7 @@ int main(int argc, char **argv)
         }
         // Verify
         memset(ttimes4, 0, (size_t) (nxLoc*nyLoc*nzLoc)*sizeof(float));
-        ierr = eikonal_h5io_readTravelTimes(MPI_COMM_WORLD,
+        ierr = eikonal_h5io_readTravelTimes(intraTableComm, //MPI_COMM_WORLD,
                                             tttFileID,
                                             k, model,
                                             iphase,
@@ -382,13 +414,16 @@ int main(int argc, char **argv)
     }
     free(ttimes);
     // I am now ready to locate some earthquakes
-
+   int iverb = 0;
+    locate3d_initialize(&globalCommInt, &iverb, &nx, &ny, &nz,
+                        &ndivx, &ndivy, &ndivz, &ierr);
     // Finalize
     eikonal_h5io_finalize(MPI_COMM_WORLD, &tttFileID);
     freeStations(&stations);
     freeCatalog(&catalog);
     if (vpmod != NULL){free(vpmod);}
     if (vsmod != NULL){free(vsmod);}
+    mpiutils_finalize();
     MPI_Finalize();
     return EXIT_SUCCESS;
 }

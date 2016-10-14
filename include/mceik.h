@@ -8,7 +8,7 @@ extern "C"
 {
 #endif
 
-
+#ifdef __cplusplus
 }
 #endif
 #endif /* _mceik_h__ */

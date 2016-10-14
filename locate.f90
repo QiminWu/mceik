@@ -118,90 +118,125 @@
 !                                                                                        !
 !========================================================================================!
 !                                                                                        !
-      SUBROUTINE LOCATE_GRIDSEARCH_MPI(tttFileID, model, &
-                                       job, ngrd, nobs, nsrc, nwt, &
-                                       tori, wtobs, tobs,          &
-                                       hypo, ierr)
+      SUBROUTINE LOCATE3D_GRIDSEARCH_MPI(tttFileID, model, &
+                                         job, ngrd, nobs, nsrc,  &
+                                         statCor, tori, wtobs, tobs,          &
+                                       hypo, ierr)  &
+                 BIND(C,NAME='locate3d_gridSearch_mpi')
       USE MPI
       USE H5IO_MODULE, ONLY : H5IO_READ_TRAVELTIMESF
       USE LOCATE_MODULE, ONLY : COMPUTE_LOCATION_ONLY,            &
                                 COMPUTE_LOCATION_AND_ORIGIN_TIME, &
                                 COMPUTE_LOCATION_AND_STATICS,     &
-                                COMPUTE_LOCATION_ALL, zero, sqrt2i
+                                COMPUTE_LOCATION_ALL, zero, one, sqrt2i
       USE LOCATE_TYPES, ONLY : locateType
       USE ISO_C_BINDING
-      INTEGER(C_INT), INTENT(IN) :: model, tttFileID
-      REAL(C_DOUBLE), INTENT(IN) :: tori(nsrc), wtobs(nwt), tobs(nsrc*nobs)
+      INTEGER(C_INT), INTENT(IN) :: job, model, nobs, ngrd, nsrc, tttFileID
+      REAL(C_DOUBLE), INTENT(IN) :: statCor(nobs), tori(nsrc), wtobs(nsrc*nobs), tobs(nsrc*nobs)
       REAL(C_DOUBLE), INTENT(OUT) :: hypo(4*nsrc)
       INTEGER(C_INT), INTENT(OUT) :: ierr
-      DOUBLE PRECISION, ALLOCATABLE :: pdf(:), pdfbuf(:)
+      DOUBLE PRECISION, ALLOCATABLE :: logPDF(:), logPDFbuf(:), t0(:), t0buf(:)
       REAL, ALLOCATABLE :: test4(:)
-      DOUBLE PRECISION res, t0, tobs_i, wt_i, wt_i_sqrt2i
+      DOUBLE PRECISION res, tobs_i, xnorm, wt_i, wt_i_sqrt2i
+      INTEGER igrd, isrc
       INTEGER, PARAMETER :: master = 0
 TYPE(locateType) :: locate
       ierr = 0
       hypo(1:4*nsrc) = zero
       nobs_groups = 1
       npdomain = 1
+      mydomain_id = 0
+      myobs_id = 0
       !CALL MPI_COMM_RANK(obs_comm,    myobs_id,    mpierr) ! 
       !CALL MPI_COMM_RANK(domain_comm, mydomain_id, mpierr) ! block of domain 
       !CALL MPI_COMM_SIZE(obs_comm,    nobs_groups, mpierr) ! observations groups
       !CALL MPI_COMM_SIZE(domain_comm, npdomain,    mpierr) ! processors in domain
-      ALLOCATE(pdf(ngrd))
-      ALLOCATE(pdfbuf(ngrd))
+      ALLOCATE(logPDF(ngrd))
+      ALLOCATE(logPDFbuf(ngrd))
       ALLOCATE(test4(ngrd))
-      pdf(:) = zero
-      pdfbuf(:) = zero
+      ALLOCATE(t0(ngrd))
+      logPDF(:) = zero
+      logPDFbuf(:) = zero
+      t0(:) = zero
       ! classify the job
-      IF (job == COMPUTE_LOCATION_ONLY) THEN
+      IF (job == COMPUTE_LOCATION_ONLY        .OR.    &
+          job == COMPUTE_LOCATION_AND_ORIGIN_TIME) THEN
          DO 1 isrc=1,nsrc
+            logPDF(:) = zero
+            logPDFbuf(:) = zero
             hypo(4*(isrc - 1)+1) = tori(isrc)
-            t0 = tori(isrc)
-            ! stack the residuals for this event
-            DO 2 iobs=1,nobs,nobs_groups
+            ! compute the analytic origin time (e.g. moser 1992 eqn 19)
+            IF (job == COMPUTE_LOCATION_AND_ORIGIN_TIME) THEN
+               ALLOCATE(t0buf(ngrd))
+               t0buf(:) = zero 
+               t0(:) = zero
                ! load test4 from disk
-               CALL H5IO_READ_TRAVELTIMESF(MPI_COMM_WORLD, tttFileID, &
-                                           iobs, model, iphase,       &
-                                           locate%ix0, locate%iy0, locate%iz0,          &
-                                           locate%nxLoc, locate%nyLoc, locate%nzLoc,    &
-                                           test4, ierr) 
+               CALL H5IO_READ_TRAVELTIMESF(MPI_COMM_WORLD, tttFileID,                &   
+                                           iobs, model, iphase,                      &   
+                                           locate%ix0, locate%iy0, locate%iz0,       &   
+                                           locate%nxLoc, locate%nyLoc, locate%nzLoc, &
+                                           test4, ierr)
                IF (ierr /= 0) THEN
-                  WRITE(*,*) 'Error reading observed traveltimes'
+                  WRITE(*,*) 'Error reading observed traveltimes 1'
+                  GOTO 500 
+               ENDIF
+               ! tabulate the common residual
+               DO 2 iobs=1,nobs
+                  tobs_i =  tobs((isrc-1)*nobs+iobs) - statCor(iobs)
+                  wt_i   = wtobs((isrc-1)*nobs+iobs)
+                  IF (wt_i > zero) THEN
+                     !$OMP DO SIMD
+                     DO 3 igrd=1,ngrd
+                        t0buf(igrd) = t0buf(igrd) + wt_i*(tobs_i - DBLE(test4(igrd)))
+    3                CONTINUE
+                     !$OMP END DO SIMD
+                  ENDIF
+    2          CONTINUE
+               xnorm = SUM(wtobs((isrc-1)*nobs+1:isrc*nobs))
+               IF (xnorm > zero) xnorm = one/xnorm
+               CALL DSCAL(ngrd, xnorm, t0buff, 1) ! divide by the sum of the weights
+               ! add up the common residual (which is the origin time at each grid point)
+               !CALL MPI_ALLREDUCE(t0buf, t0, MPI_DOUBLE_PRECISION, MPI_SUM, &
+               !                   domain_comm, mpierr)
+            ELSE
+               t0(:) = tori(isrc)
+            ENDIF
+            ! stack the residuals for this event
+            DO 4 iobs=1,nobs,nobs_groups
+               ! load test4 from disk
+!              CALL H5IO_READ_TRAVELTIMESF(myobs_comm, tttFileID,                &
+!                                          iobs, model, iphase,                      &
+!                                          locate%ix0, locate%iy0, locate%iz0,       &
+!                                          locate%nxLoc, locate%nyLoc, locate%nzLoc, &
+!                                          test4, ierr)
+               IF (ierr /= 0) THEN
+                  WRITE(*,*) 'Error reading observed traveltimes 2'
                   GOTO 500
                ENDIF
                ! set the observations and weights 
-               tobs_i = tobs(iobs) - t0  ! remove the origin time (increases precision)
-               wt_i = wtobs(iobs)
+               tobs_i =  tobs((isrc-1)*nobs+iobs) - statCor(iobs)
+               wt_i   = wtobs((isrc-1)*nobs+iobs)
                wt_i_sqrt2i = wt_i*sqrt2i ! accounts for 1/2 scaling in L2 norm
-               ! sum the residuals on the grid 
+               ! sum the residuals on the grid [log(e^{-(L_1+L2+...)}) =-L_1 - L_2 ...
                !$OMP DO SIMD
-               DO 3 igrd=1,ngrd
-                  res = wt_i_sqrt2i*(tobs_i - DBLE(test4(igrd)))
-                  pdfbuf(igrd) = pdfbuf(igrd) + res*res
-    3          CONTINUE 
+               DO 5 igrd=1,ngrd
+                  res = wt_i_sqrt2i*(tobs_i - (DBLE(test4(igrd)) + t0(igrd)))
+                  logPDFbuf(igrd) = logPDFbuf(igrd) - res*res
+    5          CONTINUE
                !$OMP END DO SIMD
-    2       CONTINUE
-            ! reduce the PDF
-pdf(:) = pdfbuf(:)
-            !CALL MPI_REDUCE(pdfbuf, ngrd, MPI_DOUBLE_PRECISION, MPI_SUM, master, &
+    4       CONTINUE
+            ! reduce the log of PDFs onto the first observation group
+            !CALL MPI_REDUCE(logPDFbuf, logPDF, ngrd, MPI_DOUBLE_PRECISION, MPI_SUM, master, &
             !                cross_comm, mpierr)
-            ! now reduce
-    1    CONTINUE
-      ELSEIF (job == COMPUTE_LOCATION_AND_ORIGIN_TIME) THEN
-         DO 11 isrc=1,nsrc
-            ! RAM non-intensive so process grids indepdently and stack
-            DO 12 iobs=1,nobs,nobs_groups
-               ! extract the traveltime grid
-               i1 = (iobs - 1)*ngrd + 1
-               i2 = iobs*ngrd
+            ! now the head group can locate the event
+            IF (mydomain_id == master) THEN
 
-               ! stack laterally across processors
-
-   12       CONTINUE
-   11    CONTINUE
+            ENDIF
+    1    CONTINUE ! loop on sources
       ! locate many sources
       ELSEIF (job == COMPUTE_LOCATION_AND_STATICS) THEN
          WRITE(*,*) 'Not yet done'
+         ierr = 1
 !        DO 100 iobs=1,nobs
 !           DO 200 isrc=1,nsrc
 
@@ -300,6 +335,56 @@ pdf(:) = pdfbuf(:)
     1 CONTINUE
       RETURN
       END
+!                                                                                        !
+!========================================================================================!
+!                                                                                        !
+      SUBROUTINE LOCATE3D_INITIALIZE(comm, iverb, nx, ny, nz, &
+                                     ndivx, ndivy, ndivz,     &
+                                     ierr)                    &
+                 BIND(C,NAME='locate3d_initialize')
+      USE MPI
+      USE MPIUTILS_MODULE, ONLY : MPIUTILS_INITIALIZE3D, linitComm
+      USE LOCATE_MODULE, ONLY : parms
+      USE ISO_C_BINDING
+      INTEGER(C_INT), INTENT(IN) :: comm, iverb, nx, ny, nz, ndivx, ndivy, ndivz
+      INTEGER(C_INT), INTENT(OUT) :: ierr
+      INTEGER, PARAMETER :: master = 0
+      INTEGER, PARAMETER :: ireord = 1
+      INTEGER, PARAMETER :: iwt = 0
+      ierr = 0
+      CALL MPI_COMM_RANK(comm, myid, mpierr)
+      IF (myid == master) THEN
+         parms%iverb = iverb
+         parms%nx = nx
+         parms%ny = ny
+         parms%nz = nz
+         parms%ndivx = ndivx
+         parms%ndivy = ndivy
+         parms%ndivz = ndivz
+      ENDIF
+      CALL MPI_BCAST(parms%iverb, 1, MPI_INTEGER, master, comm, mpierr)
+      CALL MPI_BCAST(parms%nx,    1, MPI_INTEGER, master, comm, mpierr)
+      CALL MPI_BCAST(parms%ny,    1, MPI_INTEGER, master, comm, mpierr)
+      CALL MPI_BCAST(parms%nz,    1, MPI_INTEGER, master, comm, mpierr)
+      CALL MPI_BCAST(parms%ndivx, 1, MPI_INTEGER, master, comm, mpierr)
+      CALL MPI_BCAST(parms%ndivy, 1, MPI_INTEGER, master, comm, mpierr)
+      CALL MPI_BCAST(parms%ndivz, 1, MPI_INTEGER, master, comm, mpierr)
+      IF (.NOT.linitComm) THEN
+         WRITE(*,*) 'locate_initialize3d: Splitting communicator...'
+         CALL MPIUTILS_INITIALIZE3D(comm, ireord, iwt,                     &
+                                    parms%ndivx, parms%ndivy, parms%ndivz, &
+                                    ierr)
+         IF (ierr /= 0) THEN
+            WRITE(*,*) 'locate_initialize3d: Error splitting communicator'
+            RETURN
+         ENDIF
+      ENDIF
+      RETURN
+      END
+!                                                                                        !
+!========================================================================================!
+!                                                                                        !
+
 !     SUBROUTINE LOCATE_INITIALIZE(comm, iverb, nx, ny, nz, &
 !                                  ndivx, ndivy, ndivz )
  
@@ -310,6 +395,8 @@ pdf(:) = pdfbuf(:)
 !     DO 1 i=1,
 !     RETURN
 !     END
+
+      subroutine delete_me()
 
       USE MPI
       USE MPIUTILS_MODULE, ONLY : global_comm, intra_table_comm, inter_table_comm 

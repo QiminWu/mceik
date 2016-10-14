@@ -100,7 +100,7 @@
                                       lreord, iwt, ndivx, ndivy, ndivz,   &
                                       global_comm, intra_table_comm,      &
                                       inter_table_comm, ierr)
-      USE MPIUTILS_MODULE, ONLY : MPIUTILS_GRD2IJK
+      USE MPIUTILS_MODULE, ONLY : MPIUTILS_GRD2IJK, linitComm
       USE MPI
       IMPLICIT NONE
       INTEGER, INTENT(IN) :: comm, iwt, ndivx, ndivy, ndivz
@@ -115,6 +115,9 @@
       INTEGER, PARAMETER :: wts(27) = [1, 2, 1,  2, 3, 2,  1, 2, 1, & ! base
                                        2, 3, 2,  3, 0, 3,  2, 3, 2, & ! middle
                                        1, 2, 1,  2, 3, 2,  1, 2, 1]   ! top
+      IF (linitComm) THEN
+         WRITE(*,*) 'mpiutils_splitcomm3d: Warning communicator already initialized'
+      ENDIF
       ! get MPI information
       CALL MPI_COMM_SIZE(comm, nprocs, mpierr)
       CALL MPI_COMM_RANK(comm, myid,   mpierr)
@@ -219,8 +222,21 @@
       DEALLOCATE(srcs)
       ! now split the new communicator 
       CALL MPI_COMM_RANK(global_comm, myid, mpierr)
-      CALL MPI_COMM_SPLIT(global_comm, myblock_id, myid, intra_table_comm, mpierr)
-      CALL MPI_COMM_SPLIT(global_comm, mytable_id, myid, inter_table_comm, mpierr)
+      CALL MPI_COMM_SPLIT(global_comm, mytable_id, myid, intra_table_comm, mpierr)
+      CALL MPI_COMM_SPLIT(global_comm, myblock_id, myid, inter_table_comm, mpierr)
+      CALL MPI_COMM_SIZE(intra_table_comm, nprocs, mpierr)
+      IF (nprocs /= nblocks) THEN
+         WRITE(*,*) 'mpiutils_splitcomm3d: Error splitting intra_table_comm'
+         ierr = 1
+         RETURN
+      ENDIF
+      CALL MPI_COMM_SIZE(inter_table_comm, nprocs, mpierr)
+      IF (nprocs /= ntables) THEN
+         WRITE(*,*) 'mpiutils_splitcomm3d: Error splitting inter_table_comm'
+         ierr = 1
+         RETURN
+      ENDIF
+      linitComm = .TRUE.
       RETURN
       END !SUBROUTINE MPIUTILS_SPLITCOMM3
 !                                                                                        !
@@ -284,7 +300,26 @@
       ENDIF
       RETURN
       END
-
+!                                                                                        !
+!========================================================================================!
+!                                                                                        !
+!>    @brief Initializes the communicators for the 3D tomography and location.
+!>           Further details can be found in the splitcomm3d routine.
+!>
+!>    @param[in] comm      global communicator to split and set.
+!>    @param[in] ireord    if 1 then the MPI IDs will be reordered based on proximity. 
+!>    @param[in] iwt       if 1 then the estimated communication will volume be
+!>                         applied to reordering ranks.
+!>    @param[in] ndivx     number of divisions of domain in x direction.
+!>    @param[in] ndivy     number of divisions of domain in y direction.
+!>    @param[in] ndivz     number of divisions of domain in z direction.
+!>
+!>    @param[out] ierr     0 indicates success
+!>
+!>    @author Ben Baker
+!>
+!>    @copyright Apache 2
+!> 
       SUBROUTINE MPIUTILS_INITIALIZE3D(comm, ireord, iwt,         &
                                        ndivx, ndivy, ndivz, ierr) &
                  BIND(C, NAME='mpiutils_initialize3d')
@@ -330,6 +365,42 @@
       RETURN
       END
 
+      SUBROUTINE MPIUTILS_FINALIZE() &
+                 BIND(C, NAME='mpiutils_finalize')
+      USE MPIUTILS_MODULE, ONLY : global_comm, intra_table_comm, &
+                                  inter_table_comm, linitComm
+      USE ISO_C_BINDING
+      IMPLICIT NONE
+      INTEGER mpierr
+      IF (linitComm) THEN
+         CALL MPI_COMM_FREE(global_comm, mpierr)
+         CALL MPI_COMM_FREE(intra_table_comm, mpierr)
+         CALL MPI_COMM_FREE(inter_table_comm, mpierr)
+         linitComm = .FALSE.
+      ENDIF
+      RETURN
+      END
+
+      SUBROUTINE MPIUTILS_GET_COMMUNICATORS(globalComm, intraTableComm, &
+                                            interTableComm, ierr)       &
+                 BIND(C, NAME='mpiutils_getCommunicators')
+      USE MPIUTILS_MODULE, ONLY : global_comm, intra_table_comm, &
+                                  inter_table_comm, linitComm
+      USE ISO_C_BINDING
+      IMPLICIT NONE
+      INTEGER(C_INT), INTENT(OUT) :: globalComm, intraTableComm, &
+                                     interTableComm, ierr
+      ierr = 0
+      IF (.NOT.linitComm) THEN
+         WRITE(*,*) 'mpiutils_get_communicators: Never initialized communicators'
+         ierr = 1
+         RETURN
+      ENDIF
+      globalComm = global_comm
+      intraTableComm = intra_table_comm
+      interTableComm = inter_table_comm
+      RETURN
+      END
 
       subroutine test_mpi()
       USE MPI

@@ -59,10 +59,26 @@
             INTEGER(C_INT), INTENT(OUT) :: i, j, k, ierr
             END SUBROUTINE MPIUTILS_GRD2IJK
 
+            SUBROUTINE MPIUTILS_FINALIZE() &
+                       BIND(C, NAME='mpiutils_finalize')
+            USE ISO_C_BINDING
+            IMPLICIT NONE
+            END SUBROUTINE MPIUTILS_FINALIZE
+
+            SUBROUTINE MPIUTILS_GET_COMMUNICATORS(globalComm, intraTableComm, &
+                                                  interTableComm, ierr)       &
+                       BIND(C, NAME='mpiutils_getCommunicators')
+            USE ISO_C_BINDING
+            IMPLICIT NONE
+            INTEGER(C_INT), INTENT(OUT) :: globalComm, intraTableComm, &
+                                           interTableComm, ierr
+            END SUBROUTINE MPIUTILS_GET_COMMUNICATORS
+
          END INTERFACE
          INTEGER, SAVE :: global_comm      ! overall communication
          INTEGER, SAVE :: intra_table_comm ! communicate within the traveltime table
          INTEGER, SAVE :: inter_table_comm ! communicate between the traveltime tables
+         LOGICAL, SAVE :: linitComm = .FALSE.  ! flag indicating communicators are set
       END MODULE MPIUTILS_MODULE
 
       MODULE EIKONAL3D_TYPES
@@ -424,7 +440,38 @@
             INTEGER nzLoc
             INTEGER ngrd
          END TYPE locateType
+
+         TYPE locateParametersType
+            INTEGER iverb
+            INTEGER ndivx
+            INTEGER ndivy
+            INTEGER ndivz
+            INTEGER nx
+            INTEGER ny
+            INTEGER nz
+         END TYPE locateParametersType
       END MODULE LOCATE_TYPES
+
+      MODULE LOCATE_MODULE
+         USE CONSTANTS_MODULE, ONLY : one, sqrt2i, two, zero
+         USE LOCATE_TYPES, ONLY : locateParametersType, locateType
+         INTERFACE
+            SUBROUTINE LOCATE_INITIALIZE_PDF(ngrd, pdf)
+            USE ISO_C_BINDING
+            IMPLICIT NONE
+            INTEGER(C_INT), INTENT(IN) :: ngrd
+            REAL(C_DOUBLE), INTENT(OUT) :: pdf(ngrd)
+            END SUBROUTINE LOCATE_INITIALIZE_PDF
+         END INTERFACE
+         TYPE(locateType), SAVE :: locate_loc
+         TYPE(locateParametersType), SAVE :: parms 
+         INTEGER, PARAMETER :: COMPUTE_NONE = 0
+         INTEGER, PARAMETER :: COMPUTE_LOCATION_ONLY = 1
+         INTEGER, PARAMETER :: COMPUTE_LOCATION_AND_ORIGIN_TIME = 2
+         INTEGER, PARAMETER :: COMPUTE_LOCATION_AND_STATICS = 3
+         INTEGER, PARAMETER :: COMPUTE_ORIGIN_TIME_AND_STATICS = 4
+         INTEGER, PARAMETER :: COMPUTE_LOCATION_ALL = 5
+      END MODULE LOCATE_MODULE
 
       MODULE H5IO_MODULE
          INTERFACE
@@ -445,24 +492,4 @@
             END SUBROUTINE H5IO_READ_TRAVELTIMESF
          END INTERFACE
       END MODULE H5IO_MODULE
-
-      MODULE LOCATE_MODULE
-         USE CONSTANTS_MODULE, ONLY : one, sqrt2i, two, zero
-         USE LOCATE_TYPES, ONLY : locateType
-         INTERFACE
-            SUBROUTINE LOCATE_INITIALIZE_PDF(ngrd, pdf)
-            USE ISO_C_BINDING
-            IMPLICIT NONE
-            INTEGER(C_INT), INTENT(IN) :: ngrd
-            REAL(C_DOUBLE), INTENT(OUT) :: pdf(ngrd)
-            END SUBROUTINE LOCATE_INITIALIZE_PDF
-         END INTERFACE
-         TYPE(locateType), SAVE :: locate_loc
-         INTEGER, PARAMETER :: COMPUTE_NONE = 0
-         INTEGER, PARAMETER :: COMPUTE_LOCATION_ONLY = 1
-         INTEGER, PARAMETER :: COMPUTE_LOCATION_AND_ORIGIN_TIME = 2 
-         INTEGER, PARAMETER :: COMPUTE_LOCATION_AND_STATICS = 3 
-         INTEGER, PARAMETER :: COMPUTE_ORIGIN_TIME_AND_STATICS = 4
-         INTEGER, PARAMETER :: COMPUTE_LOCATION_ALL = 5
-      END MODULE LOCATE_MODULE
 
