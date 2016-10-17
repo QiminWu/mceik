@@ -6,7 +6,8 @@
 #include "h5io.h"
 #include "os.h"
 
-int eikonal_h5io_setFileName(const char *dirnm, const char *projnm,
+int eikonal_h5io_setFileName(enum fileName_enum job,
+                             const char *dirnm, const char *projnm,
                              char fileName[PATH_MAX])
 {
     const char *fcnm = "eikonal_h5io_setFileName\0";
@@ -46,7 +47,14 @@ int eikonal_h5io_setFileName(const char *dirnm, const char *projnm,
         return -1;
     }
     strcat(fileName, projnm);
-    strcat(fileName, ".h5\0");
+    if (job == TRAVELTIME_FILE)
+    {
+        strcat(fileName, "_ttimes.h5\0");
+    }
+    else if (job == 2)
+    {
+        strcat(fileName, "_locations.h5\0");
+    }
     return 0;
 }
 //============================================================================//
@@ -69,6 +77,15 @@ void eikonal_h5io_setTravelTimeName(const int model, const int station,
     return;
 }
 //============================================================================//
+void eikonal_h5io_setLocationName(const int model, const int event,
+                                  char dataSetName[512])
+{
+    memset(dataSetName, 0, 512*sizeof(char));
+    sprintf(dataSetName,
+            "/logJPDFs/Event_%d/Model_%d/logJPDF", event, model);
+    return;
+}
+//============================================================================//
 int eikonal_h5io_finalize(const MPI_Comm comm, hid_t *tttFileID)
 {
     const char *fcnm = "eiknoal_h5io_finalize\0";
@@ -84,92 +101,242 @@ int eikonal_h5io_finalize(const MPI_Comm comm, hid_t *tttFileID)
 } 
 //============================================================================//
 /*!
- * @brief Initializes the HDF5 file file directory structure such that:
+ * @brief Initialize the HDF5 location file with structure
  *
  *        /ModelGeometry
- *          /Domain
- *        /TravelTimeTables
- *          /Model_1
- *            /Station_1
- *              /PTravelTimes
- *              /STravelTimes
- *            /Station_2
+ *          /xlocs
+ *          /ylocs
+ *          /zlocs
+ *        /logJPDFs
+ *          /Event_1
+ *            /priorLocationModel
+ *            /Model_1
  *            .
  *            .
  *            .
- *            /Station_nstations
- *          /Model_2
+ *            /Model_nmodels
+ *          /Event_2
  *          .
  *          .
- *          /Model_nModels
+ *          .
+ *          /Event_nevents
+ *
+ * @author Ben Baker
+ *
+ * @copyright Apache 2
  *
  */
-int eikonal_h5io_initialize(const MPI_Comm comm,
-                            const char *dirnm,
-                            const char *projnm,
-                            const int ix0, const int iy0, const int iz0,
-                            const int nx, const int ny, const int nz,
-                            const int nxLoc, const int nyLoc, const int nzLoc,
-                            const int nmodels,
-                            const int nstations,
-                            const bool lsaveScratch,
-                            const double x0, const double y0, const double z0,
-                            const double dx, const double dy, const double dz,
-                            hid_t *tttFileID)
+int eikonal_h5io_initLocations(
+    const MPI_Comm comm,
+    const char *dirnm, const char *projnm,
+    const int ix0, const int iy0, const int iz0,
+    const int nx, const int ny, const int nz,
+    const int nxLoc, const int nyLoc, const int nzLoc,
+    const int nmodels, const int nevents,
+    const double x0, const double y0, const double z0,
+    const double dx, const double dy, const double dz,
+    hid_t *locFileID)
 {
-    const char *fcnm = "eikonal_h5io_initialize\0";
+    const char *fcnm = "eikonal_h5io_initLocations\0";
     MPI_Info info = MPI_INFO_NULL;
-    char h5name[PATH_MAX], dataSetName[512], groupName[512];
+    char h5name[PATH_MAX], dataSetName[512];
     hid_t dataSetID, dataSpace, groupID, memSpace, plistID;
     herr_t status;
     size_t blockSize;
     float *data;
-    int i, ierr, indx, iphase, ivar, j, k, myid, nxMax, nyMax, nzMax;
+    int event, i, ierr, k, model, myid, nxMax, nyMax, nzMax;
     const int rank = 3;
-    hsize_t dimsLocal[3], block[3];
+    hsize_t block[3], dimsLocal[3];
     hsize_t count[3] = {1, 1, 1};
-    hsize_t dimsGlobal[3] = {nz, ny, nx};
+    hsize_t dimsGlobal[3] = {nx, ny, nz};
+    hsize_t offset[3] = {ix0, iy0, iz0};
     hsize_t stride[3] = {1, 1, 1};
-    hsize_t offset[3] = {iz0, iy0, ix0};
     const bool lsaveRAM = false; // Not supported
     //------------------------------------------------------------------------//
-    //
+    //  
     // Set the scratch file name
+    ierr = 0;
     MPI_Comm_rank(comm, &myid);
     status = 0;
-    ierr = eikonal_h5io_setFileName(dirnm, projnm, h5name); 
+    ierr = eikonal_h5io_setFileName(LOCATION_FILE, dirnm, projnm, h5name); 
     if (ierr != 0)
-    {
+    {   
         printf("%s: Error setting filename\n", fcnm);
-        return -1;
-    }
+        return -1; 
+    }   
     // Get the chunk sizes 
     MPI_Allreduce(&nzLoc, &nzMax, 1, MPI_INTEGER, MPI_MAX, comm);
     MPI_Allreduce(&nyLoc, &nyMax, 1, MPI_INTEGER, MPI_MAX, comm);
     MPI_Allreduce(&nxLoc, &nxMax, 1, MPI_INTEGER, MPI_MAX, comm);
-    dimsLocal[0] = nzMax;
+    dimsLocal[0] = nxMax;
     dimsLocal[1] = nyMax;
-    dimsLocal[2] = nxMax;
-    block[0] = nzMax;
+    dimsLocal[2] = nzMax;
+    block[0] = nxMax;
     block[1] = nyMax;
-    block[2] = nxMax;
+    block[2] = nzMax;
     // Set the properties (RAM or disk + MPI)
     plistID = H5Pcreate(H5P_FILE_ACCESS);
     status = H5Pset_fapl_mpio(plistID, comm, info);
     // If `saving' in RAM decide if we want to write the disk when done 
     if (lsaveRAM)
-    {
+    {   
         blockSize = (size_t) (nxMax*nyMax*nzMax*4*2 + 4*nxMax*nyMax*nzMax);
-        status = H5Pset_fapl_core(plistID, blockSize, lsaveScratch);
+        status = H5Pset_fapl_core(plistID, blockSize, true);
         if (status < 0)
         {
             printf("%s: Failed to set RAM memory file open\n", fcnm);
         }
-    }
-    *tttFileID = H5Fcreate(h5name, H5F_ACC_TRUNC, H5P_DEFAULT, plistID);
+    }   
+    *locFileID = H5Fcreate(h5name, H5F_ACC_TRUNC, H5P_DEFAULT, plistID);
     status = H5Pclose(plistID);
     // Make the model group
-    groupID = H5Gcreate2(*tttFileID, "/Model\0", H5P_DEFAULT,
+    ierr = eikonal_h5io_makeModelGroup(comm, *locFileID,
+                                       ix0, iy0, iz0,
+                                       nx, ny, nz,
+                                       nxLoc, nyLoc, nzLoc,
+                                       nxMax, nyMax, nzMax,
+                                       dx, dy, dz,
+                                       x0, y0, z0);
+    if (ierr != 0)
+    {
+        printf("%s: Error making model group\n", fcnm);
+        return -1;
+    }
+    // Make the uniform prior location model
+    data = (float *)calloc((size_t) (nzMax*nyMax*nxMax), sizeof(float));
+    for (k=0; k<nxMax*nyMax*nzMax; k++)
+    {
+        data[k] = 1.0;
+    }
+    memset(dataSetName, 0, sizeof(dataSetName));
+    strcpy(dataSetName, "/Model/priorLocationModel");
+    memSpace  = H5Screate_simple(rank, dimsLocal,  NULL);
+    dataSpace = H5Screate_simple(rank, dimsGlobal, NULL);
+    dataSetID = H5Dcreate(*locFileID, dataSetName,
+                          H5T_NATIVE_FLOAT,
+                          dataSpace, H5P_DEFAULT,
+                          H5P_DEFAULT, H5P_DEFAULT);
+    status = H5Sclose(dataSpace);
+    // Open the chunked dataset
+    dataSpace = H5Dget_space(dataSetID);
+    // Select hyperslab in file
+    status = H5Sselect_hyperslab(dataSpace, H5S_SELECT_SET, offset,
+                                 stride, count, block);
+    if (status < 0)
+    {
+        printf("%s: Error selecting hyperslab!\n", fcnm);
+        return -1;
+    }
+    // Create a property list for collective dataset write
+    plistID = H5Pcreate(H5P_DATASET_XFER);
+    H5Pset_dxpl_mpio(plistID, H5FD_MPIO_COLLECTIVE);
+    // Write the data
+    status = H5Dwrite(dataSetID, H5T_NATIVE_FLOAT, memSpace, dataSpace,
+                      plistID, data);
+    if (status < 0)
+    {
+        printf("%s: Error writing prior!\n", fcnm);
+        return -1;
+    }
+    // Free space
+    H5Pclose(plistID);
+    H5Sclose(dataSpace);
+    H5Dclose(dataSetID);
+    H5Sclose(memSpace);
+    // Make the location groups
+    groupID = H5Gcreate2(*locFileID, "/logJPDFs\0", H5P_DEFAULT,
+                         H5P_DEFAULT, H5P_DEFAULT);
+    status = H5Gclose(groupID);
+    MPI_Barrier(comm);
+    for (k=0; k<nevents; k++)
+    {
+        event = k + 1;
+        memset(dataSetName, 0, sizeof(dataSetName));
+        sprintf(dataSetName, "/logJPDFs/Event_%d", event);
+        groupID = H5Gcreate2(*locFileID, dataSetName, H5P_DEFAULT,
+                             H5P_DEFAULT, H5P_DEFAULT);
+        status = H5Gclose(groupID);
+        if (status < 0)
+        {
+            printf("%s: Error making model group\n", fcnm);
+            return -1;
+        }
+        // Loop on distinct models
+        for (i=0; i<nmodels; i++)
+        {
+            model = i + 1;
+            memset(dataSetName, 0, sizeof(dataSetName));
+            sprintf(dataSetName, "/logJPDFs/Event_%d/Model_%d", event, model);
+            groupID = H5Gcreate2(*locFileID, dataSetName, H5P_DEFAULT,
+                                 H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Gclose(groupID);
+            if (status < 0)
+            {
+                printf("%s: Error making model group\n", fcnm);
+                return -1; 
+            }
+            // Create the dataset
+            dataSpace = H5Screate_simple(rank, dimsGlobal, NULL);
+            eikonal_h5io_setLocationName(model, event, dataSetName);
+            dataSetID = H5Dcreate(*locFileID, dataSetName,
+                                  H5T_NATIVE_FLOAT,
+                                  dataSpace, H5P_DEFAULT,
+                                  H5P_DEFAULT, H5P_DEFAULT);
+            status = H5Dclose(dataSetID); 
+            status = H5Sclose(dataSpace);
+        }
+    }
+    MPI_Barrier(comm);
+    // Write the bogus jPDFs
+    memset(data, 0, (size_t) (nxMax*nyMax*nzMax)*sizeof(float));
+    for (k=0; k<nevents; k++)
+    {
+        event = k + 1;
+        for (i=0; i<nmodels; i++)
+        {
+            model = i + 1;
+            ierr = eikonal_h5io_writeLocationLogJPDF(comm, *locFileID,
+                                                     model, event,
+                                                     ix0, iy0, iz0,
+                                                     nxLoc, nyLoc, nzLoc,
+                                                     data);
+            if (ierr != 0)
+            {
+                printf("%s: Error writing null jpdfs\n", fcnm);
+                return -1; 
+            }
+        } // Loop on stations
+    } // Loop on models
+    free(data);
+    MPI_Barrier(comm);
+    return 0;
+}
+//============================================================================//
+int eikonal_h5io_makeModelGroup(
+    const MPI_Comm comm, const hid_t fileID,
+    const int ix0, const int iy0, const int iz0,
+    const int nxGlob, const int nyGlob, const int nzGlob,
+    const int nxLoc, const int nyLoc, const int nzLoc,
+    const int nxMax, const int nyMax, const int nzMax,
+    const double dx, const double dy, const double dz,
+    const double x0, const double y0, const double z0)
+{
+    const char *fcnm = "eikonal_h5io_makeModelGroup\0";
+    char dataSetName[512];
+    hsize_t stride[3] = {1, 1, 1};
+    hsize_t block[3] = {nxMax, nyMax, nzMax}; //{nzMax, nyMax, nxMax};
+    hsize_t count[3] = {1, 1, 1};
+    hsize_t dimsLocal[3] = {nxMax, nyMax, nzMax}; //{nzMax, nyMax, nxMax};
+    hsize_t dimsGlobal[3] = {nxGlob, nyGlob, nzGlob}; //{nzGlob, nyGlob, nxGlob};
+    hsize_t offset[3] = {ix0, iy0, iz0}; //{iz0, iy0, ix0};
+    hid_t dataSetID, dataSpace, groupID, memSpace, plistID;
+    herr_t status;
+    int i, indx, ivar, j, k;
+    float *data;
+    const int rank = 3;
+    //------------------------------------------------------------------------//
+    // Make the model group
+    groupID = H5Gcreate2(fileID, "/Model\0", H5P_DEFAULT,
                          H5P_DEFAULT, H5P_DEFAULT);
     status = H5Gclose(groupID);
     MPI_Barrier(comm);
@@ -201,12 +368,12 @@ int eikonal_h5io_initialize(const MPI_Comm comm,
         {
             strcpy(dataSetName, "/Model/ylocs\0");
             for (k=0; k<nzLoc; k++)
-            {   
+            {
                 for (j=0; j<nyLoc; j++)
-                {   
+                {
                     for (i=0; i<nxLoc; i++)
                     {
-                        indx = k*nxMax*nyMax + j*nxMax + i; 
+                        indx = k*nxMax*nyMax + j*nxMax + i;
                         data[indx] = (float) (y0 + (double) (j + iy0)*dy);
                     }
                 }
@@ -216,24 +383,23 @@ int eikonal_h5io_initialize(const MPI_Comm comm,
         {
             strcpy(dataSetName, "/Model/zlocs\0");
             for (k=0; k<nzLoc; k++)
-            {   
+            {
                 for (j=0; j<nyLoc; j++)
-                {   
+                {
                     for (i=0; i<nxLoc; i++)
                     {
-                        indx = k*nxMax*nyMax + j*nxMax + i; 
+                        indx = k*nxMax*nyMax + j*nxMax + i;
                         data[indx] = (float) (z0 + (double) (k + iz0)*dz);
                     }
                 }
             }
         }
-        dataSetID = H5Dcreate(*tttFileID, dataSetName,
+        dataSetID = H5Dcreate(fileID, dataSetName,
                               H5T_NATIVE_FLOAT,
                               dataSpace, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
         status = H5Sclose(dataSpace);
         // Open the chunked dataset
         dataSpace = H5Dget_space(dataSetID);
-        //globalDataSpace = H5Dget_space(dataSetID);
         // Select hyperslab in file
         status = H5Sselect_hyperslab(dataSpace, H5S_SELECT_SET, offset,
                                      stride, count, block);
@@ -259,8 +425,101 @@ int eikonal_h5io_initialize(const MPI_Comm comm,
         H5Dclose(dataSetID);
         H5Sclose(memSpace);
         free(data);
-    } // Loop on variables
-    MPI_Barrier(comm);
+    }
+    MPI_Barrier(comm); 
+    return 0;
+}
+//============================================================================//
+/*!
+ * @brief Initializes the HDF5 file file directory structure such that:
+ *
+ *        /ModelGeometry
+ *          /xlocs
+ *          /ylocs
+ *          /zlocs
+ *        /TravelTimeTables
+ *          /Model_1
+ *            /Station_1
+ *              /PTravelTimes
+ *              /STravelTimes
+ *            /Station_2
+ *            .
+ *            .
+ *            .
+ *            /Station_nstations
+ *          /Model_2
+ *          .
+ *          .
+ *          /Model_nModels
+ *
+ */
+int eikonal_h5io_initTTables(const MPI_Comm comm,
+                             const char *dirnm,
+                             const char *projnm,
+                             const int ix0, const int iy0, const int iz0,
+                             const int nx, const int ny, const int nz,
+                             const int nxLoc, const int nyLoc, const int nzLoc,
+                             const int nmodels,
+                             const int nstations,
+                             const bool lsaveScratch,
+                             const double x0, const double y0, const double z0,
+                             const double dx, const double dy, const double dz,
+                             hid_t *tttFileID)
+{
+    const char *fcnm = "eikonal_h5io_initTTables\0";
+    MPI_Info info = MPI_INFO_NULL;
+    char h5name[PATH_MAX], dataSetName[512], groupName[512];
+    hid_t dataSetID, dataSpace, groupID, plistID;
+    herr_t status;
+    size_t blockSize;
+    float *data;
+    int i, ierr, iphase, k, model, myid, nxMax, nyMax, nzMax, station;
+    const int rank = 3;
+    hsize_t dimsGlobal[3] = {nx, ny, nz}; //{nz, ny, nx};
+    const bool lsaveRAM = false; // Not supported
+    //------------------------------------------------------------------------//
+    //
+    // Set the scratch file name
+    MPI_Comm_rank(comm, &myid);
+    status = 0;
+    ierr = eikonal_h5io_setFileName(TRAVELTIME_FILE, dirnm, projnm, h5name); 
+    if (ierr != 0)
+    {
+        printf("%s: Error setting filename\n", fcnm);
+        return -1;
+    }
+    // Get the chunk sizes 
+    MPI_Allreduce(&nzLoc, &nzMax, 1, MPI_INTEGER, MPI_MAX, comm);
+    MPI_Allreduce(&nyLoc, &nyMax, 1, MPI_INTEGER, MPI_MAX, comm);
+    MPI_Allreduce(&nxLoc, &nxMax, 1, MPI_INTEGER, MPI_MAX, comm);
+    // Set the properties (RAM or disk + MPI)
+    plistID = H5Pcreate(H5P_FILE_ACCESS);
+    status = H5Pset_fapl_mpio(plistID, comm, info);
+    // If `saving' in RAM decide if we want to write the disk when done 
+    if (lsaveRAM)
+    {
+        blockSize = (size_t) (nxMax*nyMax*nzMax*4*2 + 4*nxMax*nyMax*nzMax);
+        status = H5Pset_fapl_core(plistID, blockSize, lsaveScratch);
+        if (status < 0)
+        {
+            printf("%s: Failed to set RAM memory file open\n", fcnm);
+        }
+    }
+    *tttFileID = H5Fcreate(h5name, H5F_ACC_TRUNC, H5P_DEFAULT, plistID);
+    status = H5Pclose(plistID);
+    // Make the model group
+    ierr = eikonal_h5io_makeModelGroup(comm, *tttFileID,
+                                       ix0, iy0, iz0,
+                                       nx, ny, nz,
+                                       nxLoc, nyLoc, nzLoc,
+                                       nxMax, nyMax, nzMax,
+                                       dx, dy, dz,
+                                       x0, y0, z0);
+    if (ierr != 0)
+    {
+        printf("%s: Error making model group\n", fcnm);
+        return -1;
+    }
     // Make the traveltime table groups
     groupID = H5Gcreate2(*tttFileID, "/TravelTimeTables\0", H5P_DEFAULT,
                          H5P_DEFAULT, H5P_DEFAULT);
@@ -269,11 +528,11 @@ int eikonal_h5io_initialize(const MPI_Comm comm,
     // Make the traveltime table for the model and then the stations.  
     // Since this is a pure initialization phase we will set the space
     // and update throughout the program execution
-    data = (float *)calloc((size_t) (nzMax*nyMax*nxMax), sizeof(float)); 
     for (i=0; i<nmodels; i++)
     {
+        model = i + 1;
         memset(groupName, 0, sizeof(groupName));
-        sprintf(groupName, "/TravelTimeTables/Model_%d", i+1);
+        sprintf(groupName, "/TravelTimeTables/Model_%d", model);
         groupID = H5Gcreate2(*tttFileID, groupName, H5P_DEFAULT,
                              H5P_DEFAULT, H5P_DEFAULT);
         status = H5Gclose(groupID);
@@ -284,9 +543,10 @@ int eikonal_h5io_initialize(const MPI_Comm comm,
         }
         for (k=0; k<nstations; k++)
         {
+            station = k + 1;
             memset(groupName, 0, sizeof(groupName));
             sprintf(groupName, "/TravelTimeTables/Model_%d/Station_%d",
-                    i+1, k+1);
+                    model, station);
             groupID = H5Gcreate2(*tttFileID, groupName, H5P_DEFAULT,
                                  H5P_DEFAULT, H5P_DEFAULT);
             status = H5Gclose(groupID);
@@ -296,59 +556,165 @@ int eikonal_h5io_initialize(const MPI_Comm comm,
                 return -1;
             }
             // Create dataspace for dataset
-            for (iphase=0; iphase<2; iphase++)
+            for (iphase=1; iphase<=2; iphase++)
             {
                 dataSpace = H5Screate_simple(rank, dimsGlobal, NULL);
-                memSpace  = H5Screate_simple(rank, dimsLocal,  NULL);
-                memset(dataSetName, 0, sizeof(dataSetName));
-                strcpy(dataSetName, groupName);
                 if (iphase == 1)
                 {
-                    strcat(dataSetName, "/PTravelTimes\0");
+                    eikonal_h5io_setTravelTimeName(model, station,
+                                                   true, dataSetName);
                 }
                 else
                 {
-                    strcat(dataSetName, "/STravelTimes\0");
+                    eikonal_h5io_setTravelTimeName(model, station,
+                                                   false, dataSetName);
                 }
                 dataSetID = H5Dcreate(*tttFileID, dataSetName,
                                       H5T_NATIVE_FLOAT,
                                       dataSpace, H5P_DEFAULT,
                                       H5P_DEFAULT, H5P_DEFAULT);
+                status = H5Dclose(dataSetID); 
                 status = H5Sclose(dataSpace);
-                // Open the chunked dataset
-                dataSpace = H5Dget_space(dataSetID);
-                // Select hyperslab in file
-                status = H5Sselect_hyperslab(dataSpace, H5S_SELECT_SET, offset,
-                                             stride, count, block);
-                if (status < 0)
-                {
-                    printf("%s: Error selecting hyperslab!\n", fcnm);
-                    return -1;
-                }
-                // Create a property list for collective dataset write
-                plistID = H5Pcreate(H5P_DATASET_XFER);
-                H5Pset_dxpl_mpio(plistID, H5FD_MPIO_COLLECTIVE);
-                // Write the data
-                status = H5Dwrite(dataSetID, H5T_NATIVE_FLOAT, memSpace,
-                                  dataSpace, plistID, data);
-                if (status < 0)
-                {
-                    printf("%s: Error writing dataset: %s!\n",
-                           fcnm, dataSetName);
-                    return -1;
-                }
-                // Free space
-                H5Pclose(plistID);
-                H5Sclose(dataSpace);
-                H5Dclose(dataSetID);
-                H5Sclose(memSpace);
-            }
+            } // Loop on phases
         } // loop on stations
     } // loop on models
+    MPI_Barrier(comm);
+    // Write the null traveltimes
+    data = (float *)calloc((size_t) (nzMax*nyMax*nxMax), sizeof(float));
+    for (i=0; i<nmodels; i++)
+    {
+        model = i + 1;
+        for (k=0; k<nstations; k++)
+        {
+            station = k + 1;
+            for (iphase=1; iphase<=2; iphase++)
+            {
+                ierr = eikonal_h5io_writeTravelTimes(comm, *tttFileID,
+                                                     station, model,
+                                                     iphase,
+                                                     ix0, iy0, iz0,
+                                                     nxLoc, nyLoc, nzLoc,
+                                                     data);
+                if (ierr != 0)
+                {
+                    printf("%s: Error writing null ttimes\n", fcnm);
+                    return -1;
+                }
+            } // Loop on phases
+        } // Loop on stations
+    } // Loop on models
     free(data);
     MPI_Barrier(comm);
     return 0;
 }
+//============================================================================//
+int eikonal_h5io_writeLocationLogJPDF(
+    const MPI_Comm comm, const hid_t locFileID,
+    const int model, const int event,
+    const int ix0, const int iy0, const int iz0,
+    const int nxLoc, const int nyLoc, const int nzLoc,
+    const float *__restrict__ logJPDF)
+{
+    const char *fcnm = "eikonal_h5io_writeLocationLogJPDF\0";
+    char dataSetName[512];
+    hid_t dataSetID, dataSpace, memSpace, plistID;
+    hsize_t dimsLocal[3], block[3];
+    hsize_t count[3] = {1, 1, 1};
+    hsize_t stride[3] = {1, 1, 1};
+    hsize_t offset[3] = {ix0, iy0, iz0}; //{iz0, iy0, ix0};
+    herr_t status;
+    int i, indx, j, jndx, k, nxMax, nyMax, nzMax;
+    const int rank = 3;
+    float *data;
+    //------------------------------------------------------------------------//
+    //
+    // Make the dataset name and check that it exists
+    status = 0;
+    eikonal_h5io_setLocationName(model, event, dataSetName);
+    if (H5Lexists(locFileID, dataSetName, H5P_DEFAULT) != 1)
+    {
+        printf("%s: Error dataset %s doesn't exist\n", fcnm, dataSetName);
+        return -1;
+    }
+    // Set the chunk sizes 
+    MPI_Allreduce(&nzLoc, &nzMax, 1, MPI_INTEGER, MPI_MAX, comm);
+    MPI_Allreduce(&nyLoc, &nyMax, 1, MPI_INTEGER, MPI_MAX, comm);
+    MPI_Allreduce(&nxLoc, &nxMax, 1, MPI_INTEGER, MPI_MAX, comm);
+    dimsLocal[0] = nxMax; //nzMax;
+    dimsLocal[1] = nyMax; //nyMax;
+    dimsLocal[2] = nzMax; //nxMax;
+    block[0] = nxMax; //nzMax;
+    block[1] = nyMax; //nyMax;
+    block[2] = nzMax; //nxMax;
+    // Set the data
+    data = (float *)calloc((size_t) (nxMax*nyMax*nzMax), sizeof(float));
+    for (k=0; k<nzLoc; k++)
+    {
+        for (j=0; j<nyLoc; j++)
+        {
+            for (i=0; i<nxLoc; i++)
+            {
+                indx = k*nxMax*nyMax + j*nxMax + i;
+                jndx = k*nxLoc*nyLoc + j*nxLoc + i;
+                data[indx] = logJPDF[jndx];
+            }
+        }
+    }
+    // Open the memory spaces
+    memSpace  = H5Screate_simple(rank, dimsLocal,  NULL);
+    // Open the dataset
+    dataSetID = H5Dopen2(locFileID, dataSetName, H5P_DEFAULT);
+    // Open the chunked dataset
+    dataSpace = H5Dget_space(dataSetID);
+    // Select hyperslab in file
+    status = H5Sselect_hyperslab(dataSpace, H5S_SELECT_SET, offset,
+                                 stride, count, block);
+    if (status < 0)
+    {
+        printf("%s: Error selecting hyperslab!\n", fcnm);
+        return -1;
+    }
+    // Create a property list for collective dataset write
+    plistID = H5Pcreate(H5P_DATASET_XFER);
+    H5Pset_dxpl_mpio(plistID, H5FD_MPIO_COLLECTIVE);
+    // Write the data
+    status = H5Dwrite(dataSetID, H5T_NATIVE_FLOAT, memSpace,
+                      dataSpace, plistID, data);
+    if (status < 0)
+    {
+        printf("%s: Error writing dataset: %s!\n", fcnm, dataSetName);
+        return -1;
+    }
+    // Free space
+    free(data);
+    status = H5Pclose(plistID);
+    if (status < 0)
+    {
+        printf("%s: Error closing plistID\n", fcnm);
+        return -1;
+    }
+    status = H5Sclose(dataSpace);
+    if (status < 0)
+    {
+        printf("%s: Error closing dataSpace\n", fcnm);
+        return -1;
+    }
+    status = H5Dclose(dataSetID);
+    if (status < 0)
+    {
+        printf("%s: Error closing dataSetID\n", fcnm);
+        return -1;
+    }
+    status = H5Sclose(memSpace);
+    if (status < 0)
+    {
+        printf("%s: Error closing memSpace\n", fcnm);
+        return -1;
+    }
+    MPI_Barrier(comm);
+    return 0;
+}
+                             
 //============================================================================//
 /*!
  * @brief Writes the traveltimes computed on this communicator to the
@@ -379,14 +745,12 @@ int eikonal_h5io_initialize(const MPI_Comm comm,
  * @copyright Apache 2
  *
  */
-int eikonal_h5io_writeTravelTimes(const MPI_Comm comm,
-                                  const hid_t tttFileID,
-                                  const int station, const int model,
-                                  const int iphase,
-                                  const int ix0, const int iy0, const int iz0,
-                                  const int nxLoc, const int nyLoc,
-                                  const int nzLoc,
-                                  const float *__restrict__ ttimes)
+int eikonal_h5io_writeTravelTimes(
+    const MPI_Comm comm, const hid_t tttFileID,
+    const int station, const int model, const int iphase,
+    const int ix0, const int iy0, const int iz0,
+    const int nxLoc, const int nyLoc, const int nzLoc,
+    const float *__restrict__ ttimes)
 {
     const char *fcnm = "eikonal_h5io_writeTravelTimes\0";
     char dataSetName[512];
@@ -394,7 +758,7 @@ int eikonal_h5io_writeTravelTimes(const MPI_Comm comm,
     hsize_t dimsLocal[3], block[3];
     hsize_t count[3] = {1, 1, 1};
     hsize_t stride[3] = {1, 1, 1};
-    hsize_t offset[3] = {iz0, iy0, ix0};
+    hsize_t offset[3] = {ix0, iy0, iz0}; //{iz0, iy0, ix0};
     herr_t status;
     int i, indx, j, jndx, k, nxMax, nyMax, nzMax;
     bool isP;
@@ -416,12 +780,12 @@ int eikonal_h5io_writeTravelTimes(const MPI_Comm comm,
     MPI_Allreduce(&nzLoc, &nzMax, 1, MPI_INTEGER, MPI_MAX, comm);
     MPI_Allreduce(&nyLoc, &nyMax, 1, MPI_INTEGER, MPI_MAX, comm);
     MPI_Allreduce(&nxLoc, &nxMax, 1, MPI_INTEGER, MPI_MAX, comm);
-    dimsLocal[0] = nzMax;
-    dimsLocal[1] = nyMax;
-    dimsLocal[2] = nxMax;
-    block[0] = nzMax;
-    block[1] = nyMax;
-    block[2] = nxMax;
+    dimsLocal[0] = nxMax; //nzMax;
+    dimsLocal[1] = nyMax; //nyMax;
+    dimsLocal[2] = nzMax; //nxMax;
+    block[0] = nxMax; //nzMax;
+    block[1] = nyMax; //nyMax;
+    block[2] = nzMax; //nxMax;
     // Set the data
     data = (float *)calloc((size_t) (nxMax*nyMax*nzMax), sizeof(float));
     for (k=0; k<nzLoc; k++)
@@ -571,7 +935,7 @@ int eikonal_h5io_readTravelTimes(const MPI_Comm comm,
     hsize_t dimsLocal[3], block[3];
     hsize_t count[3] = {1, 1, 1};
     hsize_t stride[3] = {1, 1, 1};
-    hsize_t offset[3] = {iz0, iy0, ix0};
+    hsize_t offset[3] = {ix0, iy0, iz0}; //{iz0, iy0, ix0};
     herr_t status;
     int i, indx, j, jndx, k, nxMax, nyMax, nzMax;
     bool isP;
@@ -593,12 +957,12 @@ int eikonal_h5io_readTravelTimes(const MPI_Comm comm,
     MPI_Allreduce(&nzLoc, &nzMax, 1, MPI_INTEGER, MPI_MAX, comm);
     MPI_Allreduce(&nyLoc, &nyMax, 1, MPI_INTEGER, MPI_MAX, comm);
     MPI_Allreduce(&nxLoc, &nxMax, 1, MPI_INTEGER, MPI_MAX, comm);
-    dimsLocal[0] = nzMax;
-    dimsLocal[1] = nyMax;
-    dimsLocal[2] = nxMax;
-    block[0] = nzMax;
-    block[1] = nyMax;
-    block[2] = nxMax;
+    dimsLocal[0] = nxMax; //nzMax;
+    dimsLocal[1] = nyMax; //nyMax;
+    dimsLocal[2] = nzMax; //nxMax;
+    block[0] = nxMax; //nzMax;
+    block[1] = nyMax; //nyMax;
+    block[2] = nzMax; //nxMax;
     // Set space
     data = (float *)calloc((size_t) (nxMax*nyMax*nzMax), sizeof(float));
     // Open the memory spaces

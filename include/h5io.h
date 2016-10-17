@@ -8,27 +8,54 @@
 extern "C" 
 {
 #endif
+
+enum fileName_enum
+{
+    TRAVELTIME_FILE = 1, 
+    LOCATION_FILE = 2,
+};
 /* Finialize the hdf5 io */
 int eikonal_h5io_finalize(const MPI_Comm comm, hid_t *tttFileID);
 /* Sets the traveltime table filename */
-int eikonal_h5io_setFileName(const char *dirnm, const char *projnm,
+int eikonal_h5io_setFileName(enum fileName_enum job,
+                             const char *dirnm, const char *projnm,
                              char fileName[PATH_MAX]);
 /* Sets the traveltime table dataset name for the given station and model */
 void eikonal_h5io_setTravelTimeName(const int model, const int station,
                                     const bool isP, char dataSetName[512]);
+/* Initialize the HDF5 locations */
+int eikonal_h5io_initLocations(
+    const MPI_Comm comm,
+    const char *dirnm, const char *projnm,
+    const int ix0, const int iy0, const int iz0,
+    const int nx, const int ny, const int nz, 
+    const int nxLoc, const int nyLoc, const int nzLoc,
+    const int nmodels, const int nevents,
+    const double x0, const double y0, const double z0, 
+    const double dx, const double dy, const double dz, 
+    hid_t *locFileID);
 /* Initialize the HDF5 traveltime table */
-int eikonal_h5io_initialize(const MPI_Comm comm,
-                            const char *dirnm,
-                            const char *projnm,
-                            const int ix0, const int iy0, const int iz0,
-                            const int nx, const int ny, const int nz, 
-                            const int nxLoc, const int nyLoc, const int nzLoc,
-                            const int nmodels,
-                            const int nstations,
-                            const bool lsaveScratch,
-                            const double x0, const double y0, const double z0, 
-                            const double dx, const double dy, const double dz, 
-                            hid_t *tttFileID);
+int eikonal_h5io_initTTables(const MPI_Comm comm,
+                             const char *dirnm,
+                             const char *projnm,
+                             const int ix0, const int iy0, const int iz0,
+                             const int nx, const int ny, const int nz, 
+                             const int nxLoc, const int nyLoc, const int nzLoc,
+                             const int nmodels,
+                             const int nstations,
+                             const bool lsaveScratch,
+                             const double x0, const double y0, const double z0, 
+                             const double dx, const double dy, const double dz, 
+                             hid_t *tttFileID);
+/* Makes the model group during initialization */
+int eikonal_h5io_makeModelGroup(
+    const MPI_Comm comm, const hid_t fileID,
+    const int ix0, const int iy0, const int iz0,
+    const int nxGlob, const int nyGlob, const int nzGlob,
+    const int nxLoc, const int nyLoc, const int nzLoc,
+    const int nxMax, const int nyMax, const int nzMax,
+    const double dx, const double dy, const double dz, 
+    const double x0, const double y0, const double z0);
 /* Reads a traveltime grid */
 int eikonal_h5io_readTravelTimes(const MPI_Comm comm,
                                  const hid_t tttFileID,
@@ -47,6 +74,13 @@ int eikonal_h5io_writeTravelTimes(const MPI_Comm comm,
                                   const int nxLoc, const int nyLoc,
                                   const int nzLoc,
                                   const float *__restrict__ ttimes);
+/* Writes the logJPDF locations */
+int eikonal_h5io_writeLocationLogJPDF(
+    const MPI_Comm comm, const hid_t locFileID,
+    const int model, const int event,
+    const int ix0, const int iy0, const int iz0,
+    const int nxLoc, const int nyLoc, const int nzLoc,
+    const float *__restrict__ logJPDF);
 
 #ifdef __cplusplus
 }

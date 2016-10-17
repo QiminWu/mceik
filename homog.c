@@ -49,7 +49,7 @@ int main(int argc, char **argv)
         nwork, nxLoc, nyLoc, nzLoc;
     int globalCommInt, intraTableCommInt, interTableCommInt;
     bool lsaveScratch;
-    hid_t tttFileID;
+    hid_t locFileID, tttFileID;
     const double const_vp = 2000.0; // Slower is harder for the solver
     const double const_vs = const_vp/sqrt(3.0);
     const double varVp = 0.25;
@@ -290,18 +290,18 @@ int main(int argc, char **argv)
     MPI_Comm_rank(interTableComm, &myTableID);
     memset(ttimeScratchFile, 0, sizeof(ttimeScratchFile));
     sprintf(ttimeScratchFile, "%s_%d", projnm, myTableID+1); 
-    ierr = eikonal_h5io_initialize(intraTableComm, //MPI_COMM_WORLD,
-                                   "./\0",
-                                   ttimeScratchFile, //"test\0",
-                                   ix0, iy0, iz0,
-                                   nx, ny, nz,
-                                   nxLoc, nyLoc, nzLoc,
-                                   nmodels,
-                                   stations.nstat,
-                                   lsaveScratch,
-                                   x0, y0, z0,
-                                   dx, dy, dz,
-                                   &tttFileID);
+    ierr = eikonal_h5io_initTTables(intraTableComm, //MPI_COMM_WORLD,
+                                    "./\0",
+                                    ttimeScratchFile, //"test\0",
+                                    ix0, iy0, iz0,
+                                    nx, ny, nz,
+                                    nxLoc, nyLoc, nzLoc,
+                                    nmodels,
+                                    stations.nstat,
+                                    lsaveScratch,
+                                    x0, y0, z0,
+                                    dx, dy, dz,
+                                    &tttFileID);
     if (ierr != 0)
     {
         printf("%s: Error initializing H5 file\n", fcnm);
@@ -413,12 +413,30 @@ int main(int argc, char **argv)
         free(ttimes4);
     }
     free(ttimes);
+    // Initialize the jPDF file
+    ierr = eikonal_h5io_initLocations(MPI_COMM_WORLD,
+                                      "./\0", projnm,
+                                      ix0, iy0, iz0,
+                                      nx, ny, nz,
+                                      nxLoc, nyLoc, nzLoc,
+                                      nmodels, catalog.nevents,
+                                      x0, y0, z0,
+                                      dx, dy, dz,
+                                      &locFileID);
     // I am now ready to locate some earthquakes
    int iverb = 0;
     locate3d_initialize(&globalCommInt, &iverb, &nx, &ny, &nz,
                         &ndivx, &ndivy, &ndivz, &ierr);
+    if (ierr != 0)
+    {
+        printf("%s: Failed to initialize locator\n", fcnm);
+        MPI_Abort(MPI_COMM_WORLD, 30);
+    }
+    // Call the locator
+
     // Finalize
     eikonal_h5io_finalize(MPI_COMM_WORLD, &tttFileID);
+    eikonal_h5io_finalize(MPI_COMM_WORLD, &locFileID);
     freeStations(&stations);
     freeCatalog(&catalog);
     if (vpmod != NULL){free(vpmod);}
