@@ -118,12 +118,43 @@
 !                                                                                        !
 !========================================================================================!
 !                                                                                        !
-      SUBROUTINE LOCATE3D_GRIDSEARCH_MPI(tttFileID, model, &
-                                         job, ngrd, nobs, nsrc,  &
-                                         statCor, tori, wtobs, tobs,          &
-                                       hypo, ierr)  &
-                 BIND(C,NAME='locate3d_gridSearch_mpi')
+!>    @brief Driver routine for earthquake location
+!>
+!>    @param[in] tttFileID    HDF5 handle for traveltime tables
+!>    @param[in] locFileID    HDF5 location file handle
+!>    @param[in] model        model number
+!>    @param[in] job          if job == 0 then compute the locations only.
+!>                            if job == 1 then compute the locations and origin times.
+!>    @param[in] ngrd         number of grid points in domain
+!>    @param[in] nobs         max number of observations for all the events
+!>    @param[in] nevents      number of events to locate
+!>    @param[in] luseObs      if 1 then use the iobs'th observation for the isrc'th
+!>                            source [nobs*nevents]
+!>    @param[in] statCor      station static correction for this observation type [nobs]
+!>    @param[in] tori         origin time (epochal seconds)
+!>    @param[in] varobs       variance in the iobs'th observation for the isrc'th
+!>                            source [nobs*nevents] 
+!>    @param[in] tobs         observed traveltime (pick time) for the iobs'th observation
+!>                            for the isrc'th source [nobs*nevents]
+!>
+!>    @param[out] hypo        on successful output contains the optimal locations
+!>                            (x,y,z,t0) for all sources [4*nevents]
+!>    @param[out] ierr        0 indicates success
+!>
+!>    @author Ben Baker
+!>
+!>    @copyright Apache 2
+!>
+      SUBROUTINE LOCATE3D_GRIDSEARCH(tttFileID, locFileID,  &
+                                     model,                 &
+                                     job, nobs, nevents, &
+                                     luseObs, statCor,      &
+                                     tori, varobs,          &
+                                     tobs, test,            &
+                                     hypo, ierr)      &
+                 BIND(C,NAME='locate3d_gridSearch')
       USE MPI
+      USE HDF5
       USE H5IO_MODULE, ONLY : H5IO_READ_TRAVELTIMESF
       USE LOCATE_MODULE, ONLY : COMPUTE_LOCATION_ONLY,            &
                                 COMPUTE_LOCATION_AND_ORIGIN_TIME, &
@@ -131,9 +162,11 @@
                                 COMPUTE_LOCATION_ALL, zero, one, sqrt2i
       USE LOCATE_TYPES, ONLY : locateType
       USE ISO_C_BINDING
-      INTEGER(C_INT), INTENT(IN) :: job, model, nobs, ngrd, nsrc, tttFileID
-      REAL(C_DOUBLE), INTENT(IN) :: statCor(nobs), tori(nsrc), wtobs(nsrc*nobs), tobs(nsrc*nobs)
-      REAL(C_DOUBLE), INTENT(OUT) :: hypo(4*nsrc)
+      INTEGER(C_INT), INTENT(IN) :: job, locfileID, model, nobs, nevents, tttFileID
+      INTEGER(C_INT), INTENT(IN) :: luseObs(nevents*nobs)
+      REAL(C_DOUBLE), INTENT(IN) :: statCor(nobs), tori(nevents),       &
+                                    varobs(nevents*nobs), tobs(nevents*nobs)
+      REAL(C_DOUBLE), INTENT(OUT) :: hypo(4*nevents), test(nevents*nobs)
       INTEGER(C_INT), INTENT(OUT) :: ierr
       DOUBLE PRECISION, ALLOCATABLE :: logPDF(:), logPDFbuf(:), t0(:), t0buf(:)
       REAL, ALLOCATABLE :: test4(:)
@@ -141,8 +174,9 @@
       INTEGER igrd, isrc
       INTEGER, PARAMETER :: master = 0
 TYPE(locateType) :: locate
+      !----------------------------------------------------------------------------------!
       ierr = 0
-      hypo(1:4*nsrc) = zero
+      hypo(1:4*nevents) = zero
       nobs_groups = 1
       npdomain = 1
       mydomain_id = 0
@@ -161,10 +195,10 @@ TYPE(locateType) :: locate
       ! classify the job
       IF (job == COMPUTE_LOCATION_ONLY        .OR.    &
           job == COMPUTE_LOCATION_AND_ORIGIN_TIME) THEN
-         DO 1 isrc=1,nsrc
+         DO 1 isrc=1,nevents
             logPDF(:) = zero
             logPDFbuf(:) = zero
-            hypo(4*(isrc - 1)+1) = tori(isrc)
+cycle
             ! compute the analytic origin time (e.g. moser 1992 eqn 19)
             IF (job == COMPUTE_LOCATION_AND_ORIGIN_TIME) THEN
                ALLOCATE(t0buf(ngrd))
@@ -182,8 +216,10 @@ TYPE(locateType) :: locate
                ENDIF
                ! tabulate the common residual
                DO 2 iobs=1,nobs
-                  tobs_i =  tobs((isrc-1)*nobs+iobs) - statCor(iobs)
-                  wt_i   = wtobs((isrc-1)*nobs+iobs)
+                  myobs = (isrc - 1)*nobs + iobs
+                  IF (luseObs(iobs) == 0) CYCLE
+                  tobs_i =   tobs(myobs) - statCor(iobs)
+                  wt_i   = varobs(myobs)
                   IF (wt_i > zero) THEN
                      !$OMP DO SIMD
                      DO 3 igrd=1,ngrd
@@ -192,9 +228,13 @@ TYPE(locateType) :: locate
                      !$OMP END DO SIMD
                   ENDIF
     2          CONTINUE
-               xnorm = SUM(wtobs((isrc-1)*nobs+1:isrc*nobs))
-               IF (xnorm > zero) xnorm = one/xnorm
-               CALL DSCAL(ngrd, xnorm, t0buff, 1) ! divide by the sum of the weights
+               ! normalize by the sum of the weights which is equivalent to scaling
+               ! by the sum of the data variances
+               xnorm = zero
+               IF (SUM(luseObs((isrc-1)*nobs+1:isrc*nobs)) == 0) THEN
+                  xnorm = SUM(varobs((isrc-1)*nobs+1:isrc*nobs))
+                  CALL DSCAL(ngrd, xnorm, t0buff, 1) ! divide by the sum of the weights
+               ENDIF
                ! add up the common residual (which is the origin time at each grid point)
                !CALL MPI_ALLREDUCE(t0buf, t0, MPI_DOUBLE_PRECISION, MPI_SUM, &
                !                   domain_comm, mpierr)
@@ -203,6 +243,8 @@ TYPE(locateType) :: locate
             ENDIF
             ! stack the residuals for this event
             DO 4 iobs=1,nobs,nobs_groups
+               myobs = (isrc - 1)*nobs + iobs
+               IF (luseObs(iobs) == 0) CYCLE
                ! load test4 from disk
 !              CALL H5IO_READ_TRAVELTIMESF(myobs_comm, tttFileID,                &
 !                                          iobs, model, iphase,                      &
@@ -214,8 +256,8 @@ TYPE(locateType) :: locate
                   GOTO 500
                ENDIF
                ! set the observations and weights 
-               tobs_i =  tobs((isrc-1)*nobs+iobs) - statCor(iobs)
-               wt_i   = wtobs((isrc-1)*nobs+iobs)
+               tobs_i = tobs(myobs) - statCor(iobs)
+               wt_i   = one/varobs(myobs)
                wt_i_sqrt2i = wt_i*sqrt2i ! accounts for 1/2 scaling in L2 norm
                ! sum the residuals on the grid [log(e^{-(L_1+L2+...)}) =-L_1 - L_2 ...
                !$OMP DO SIMD
@@ -230,7 +272,10 @@ TYPE(locateType) :: locate
             !                cross_comm, mpierr)
             ! now the head group can locate the event
             IF (mydomain_id == master) THEN
-
+!              hypo(4*(isrc-1)+1) = xhypo
+!              hypo(4*(isrc-1)+2) = yhypo
+!              hypo(4*(isrc-1)+3) = zhypo
+!              hypo(4*(isrc-1)+4) = thypo
             ENDIF
     1    CONTINUE ! loop on sources
       ! locate many sources
@@ -238,7 +283,7 @@ TYPE(locateType) :: locate
          WRITE(*,*) 'Not yet done'
          ierr = 1
 !        DO 100 iobs=1,nobs
-!           DO 200 isrc=1,nsrc
+!           DO 200 isrc=1,nevents
 
 ! 200       CONTINUE
 ! 100    CONTINUE
@@ -276,84 +321,53 @@ TYPE(locateType) :: locate
 !     RETURN
 !     END
 
-      SUBROUTINE LOCATE_SET_COMM(comm, nx, ny, nz, ndivx, ndivy, ndivz, &
-                                 dx, dy, dz, x0, y0, z0, locate, ierr)
-      USE MPIUTILS_MODULE, ONLY : MPIUTILS_GRD2IJK
-      USE LOCATE_TYPES, ONLY : locateType
-      DOUBLE PRECISION, INTENT(IN) :: dx, dy, dz, x0, y0, z0
-      INTEGER, INTENT(IN) :: comm, nx, ny, nz, ndivx, ndivy, ndivz
-      TYPE(locateType), INTENT(OUT) :: locate
-      INTEGER, INTENT(OUT) :: ierr
-      INTEGER i1, i2, imbx, imby, imbz, j1, j2, k1, k2
-      CALL MPI_COMM_RANK(comm, myid, mpierr)
-      CALL MPIUTILS_GRD2IJK(myid, ndivx, ndivy, ndivz, imbx, imby, imbz, ierr)
-      IF (ierr /= 0) THEN
-         WRITE(*,*) 'Error finding process block'
-         RETURN
-      ENDIF
-      ndx = MAX(nx/ndivx, 1)
-      ndy = MAX(ny/ndivy, 1)
-      ndz = MAX(nz/ndivz, 1)
-      i1 = ndx*imbx + 1
-      i2 = ndx*(imbx + 1)
-      j1 = ndy*imby + 1
-      j2 = ndy*(imby + 1) 
-      k1 = ndz*imbz + 1
-      k2 = ndz*(imbz + 1)
-      IF (imbx + 1 == ndivx) i2 = nx
-      IF (imby + 1 == ndivy) j2 = ny
-      IF (imbz + 1 == ndivz) k2 = nz
-      nx_loc = i2 - i1 + 1
-      ny_loc = i2 - i1 + 1
-      nz_loc = i2 - i1 + 1
-      locate%ngrd = nx_loc*ny_loc*nz_loc
-      locate%nxLoc = nx_loc
-      locate%nyLoc = ny_loc
-      locate%nzLoc = nz_loc
-      locate%nx = nx
-      locate%ny = ny
-      locate%nz = nz
-      locate%ix0 = i1
-      locate%iy0 = j1
-      locate%iz0 = k1
-      ALLOCATE(locate%l2g_node(locate%ngrd))
-      ALLOCATE(locate%xlocs(locate%ngrd))
-      ALLOCATE(locate%ylocs(locate%ngrd))
-      ALLOCATE(locate%zlocs(locate%ngrd))     
-      DO 1 iz=k1,k2
-         DO 2 iy=j1,j2
-            DO 3 ix=i1,i2
-               i = (iz - k1)*nx_loc*ny_loc &
-                 + (iy - j1)*nx_loc        &
-                 + (ix - i1) + 1 
-               locate%l2g_node(i) = (iz - 1)*nx*ny + (iy - 1)*nx + ix
-               locate%xlocs(i) = x0 + FLOAT(ix - 1)*dx
-               locate%ylocs(i) = y0 + FLOAT(iy - 1)*dy
-               locate%zlocs(i) = z0 + FLOAT(iz - 1)*dz
-    3       CONTINUE
-    2    CONTINUE
-    1 CONTINUE
-      RETURN
-      END
 !                                                                                        !
 !========================================================================================!
 !                                                                                        !
-      SUBROUTINE LOCATE3D_INITIALIZE(comm, iverb, nx, ny, nz, &
-                                     ndivx, ndivy, ndivz,     &
-                                     ierr)                    &
+!>    @brief Initializes the 3D location strutures
+!>
+!>    @param[in] comm       communicator to split in location grid
+!>    @param[in] tttFileID  traveltime HDF5 file handles 
+!>    @param[in] locFileID  location HDF5 file handles
+!>    @param[in] ndivx      number of blocks to divide domain in x
+!>    @param[in] ndivy      number of blocks to divide domain in y
+!>    @param[in] ndivz      number of blocks to divide domain in z 
+!>
+!>    @param[out] ierr      0 indicates success
+!>
+!>    @author Ben Baker
+!>
+!>    @copyright Apache 2
+!>
+      SUBROUTINE LOCATE3D_INITIALIZE(comm, iverb,                 &
+                                     tttFileID, locFileID,        &
+                                     ndivx, ndivy, ndivz,         &
+                                     ierr)  &
                  BIND(C,NAME='locate3d_initialize')
       USE MPI
-      USE MPIUTILS_MODULE, ONLY : MPIUTILS_INITIALIZE3D, linitComm
-      USE LOCATE_MODULE, ONLY : parms
+      USE H5IO_MODULE, ONLY : H5IO_GET_MODEL_DIMENSIONSF, H5IO_READ_MODELF
+      USE MPIUTILS_MODULE, ONLY : MPIUTILS_INITIALIZE3D, MPIUTILS_GRD2IJK, &
+                                  global_comm, intra_table_comm, linitComm
+      USE LOCATE_MODULE, ONLY : locate, parms, zero
       USE ISO_C_BINDING
-      INTEGER(C_INT), INTENT(IN) :: comm, iverb, nx, ny, nz, ndivx, ndivy, ndivz
+      IMPLICIT NONE
+      INTEGER(C_LONG), INTENT(IN) :: locFileID, tttFileID
+      INTEGER(C_INT), INTENT(IN) :: comm, iverb, ndivx, ndivy, ndivz
       INTEGER(C_INT), INTENT(OUT) :: ierr
+      INTEGER(C_INT) nx, ny, nz
+      INTEGER i1, i2, imbx, imby, imbz, j1, j2, k1, k2, &
+              mpierr, myid, nall, ndx, ndy, ndz, ngrdAll
       INTEGER, PARAMETER :: master = 0
       INTEGER, PARAMETER :: ireord = 1
       INTEGER, PARAMETER :: iwt = 0
       ierr = 0
       CALL MPI_COMM_RANK(comm, myid, mpierr)
       IF (myid == master) THEN
+         CALL H5IO_GET_MODEL_DIMENSIONSF(tttFileID,      &
+                                         nx, ny, nz, ierr)
+         IF (ierr /= 0) THEN
+            WRITE(*,*) 'locate3d_initialize: Error getting dimensions'
+         ENDIF
          parms%iverb = iverb
          parms%nx = nx
          parms%ny = ny
@@ -361,6 +375,8 @@ TYPE(locateType) :: locate
          parms%ndivx = ndivx
          parms%ndivy = ndivy
          parms%ndivz = ndivz
+         !parms%locFileID = locFileID
+         !parms%tttFileID = tttFileID
       ENDIF
       CALL MPI_BCAST(parms%iverb, 1, MPI_INTEGER, master, comm, mpierr)
       CALL MPI_BCAST(parms%nx,    1, MPI_INTEGER, master, comm, mpierr)
@@ -376,9 +392,72 @@ TYPE(locateType) :: locate
                                     ierr)
          IF (ierr /= 0) THEN
             WRITE(*,*) 'locate_initialize3d: Error splitting communicator'
+            ierr = 1
             RETURN
          ENDIF
       ENDIF
+      CALL MPI_BARRIER(global_comm, mpierr)
+      ! figure out my grid sizes
+      CALL MPIUTILS_GRD2IJK(myid, parms%ndivx, parms%ndivy, parms%ndivz, &
+                            imbx, imby, imbz, ierr)
+      IF (ierr /= 0) THEN
+         WRITE(*,*) 'Error finding process block'
+         RETURN
+      ENDIF
+      ndx = MAX(parms%nx/ndivx, 1)
+      ndy = MAX(parms%ny/ndivy, 1)
+      ndz = MAX(parms%nz/ndivz, 1)
+      i1 = ndx*imbx + 1 
+      i2 = ndx*(imbx + 1)
+      j1 = ndy*imby + 1 
+      j2 = ndy*(imby + 1)  
+      k1 = ndz*imbz + 1 
+      k2 = ndz*(imbz + 1)
+      IF (imbx + 1 == ndivx) i2 = parms%nx
+      IF (imby + 1 == ndivy) j2 = parms%ny
+      IF (imbz + 1 == ndivz) k2 = parms%nz
+      locate%nxLoc = i2 - i1 + 1
+      locate%nyLoc = j2 - j1 + 1 
+      locate%nzLoc = k2 - k1 + 1 
+      locate%nx = parms%nx
+      locate%ny = parms%ny
+      locate%nz = parms%nz
+      locate%ix0 = i1
+      locate%iy0 = j1
+      locate%iz0 = k1
+      ! verify i got 'em all
+      nall = locate%nxLoc*locate%nyLoc*locate%nzLoc
+      CALL MPI_REDUCE(nall, ngrdAll, 1, MPI_INTEGER, MPI_SUM, master, comm, mpierr)
+      IF (myid == master) THEN
+         IF (nx*ny*nz /= ngrdAll) THEN
+            WRITE(*,*) 'locate3d_initialize: Failed to split grid', nall, ngrdAll 
+            ierr = 1
+         ENDIF
+      ENDIF
+      ! load the model grid - these are my locations
+      ALLOCATE(locate%xlocs(MAX(1, locate%nxLoc)))
+      ALLOCATE(locate%ylocs(MAX(1, locate%nyLoc)))
+      ALLOCATE(locate%zlocs(MAX(1, locate%nzLoc)))
+      locate%xlocs(:) = REAL(zero)
+      locate%ylocs(:) = REAL(zero)
+      locate%zlocs(:) = REAL(zero)
+      CALL H5IO_READ_MODELF(intra_table_comm, tttFileID,                &
+                            locate%ix0, locate%iy0, locate%iz0,         &
+                            locate%nxLoc, locate%nyLoc, locate%nzLoc,   &
+                            locate%xlocs, locate%ylocs, locate%zlocs,   &
+                            ierr)
+      IF (ierr /= 0) THEN
+         WRITE(*,*) 'locate3d_initialize: Error reading model'
+         ierr = 1
+      ENDIF
+      RETURN
+      END
+!                                                                                        !
+!========================================================================================!
+!                                                                                        !
+      SUBROUTINE LOCATE3D_FINALIZE() &
+                 BIND(C,NAME='locate3d_finalize')
+
       RETURN
       END
 !                                                                                        !

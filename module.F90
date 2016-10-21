@@ -426,9 +426,9 @@
       MODULE LOCATE_TYPES
          TYPE locateType
             INTEGER, ALLOCATABLE :: l2g_node(:)
-            DOUBLE PRECISION, ALLOCATABLE :: xlocs(:)
-            DOUBLE PRECISION, ALLOCATABLE :: ylocs(:)
-            DOUBLE PRECISION, ALLOCATABLE :: zlocs(:)
+            REAL, ALLOCATABLE :: xlocs(:)
+            REAL, ALLOCATABLE :: ylocs(:)
+            REAL, ALLOCATABLE :: zlocs(:)
             INTEGER ix0
             INTEGER iy0
             INTEGER iz0
@@ -463,7 +463,7 @@
             REAL(C_DOUBLE), INTENT(OUT) :: pdf(ngrd)
             END SUBROUTINE LOCATE_INITIALIZE_PDF
          END INTERFACE
-         TYPE(locateType), SAVE :: locate_loc
+         TYPE(locateType), SAVE :: locate
          TYPE(locateParametersType), SAVE :: parms 
          INTEGER, PARAMETER :: COMPUTE_NONE = 0
          INTEGER, PARAMETER :: COMPUTE_LOCATION_ONLY = 1
@@ -475,6 +475,32 @@
 
       MODULE H5IO_MODULE
          INTERFACE
+            SUBROUTINE H5IO_GET_MODEL_DIMENSIONSF(inFileID,           &
+                                                  nx, ny, nz,         &
+                                                  ierr)               &
+                       BIND(C, NAME='eikonal_h5io_getModelDimensionsF')
+            USE ISO_C_BINDING
+            IMPLICIT NONE
+            INTEGER(C_LONG), INTENT(IN) :: inFileID
+            INTEGER(C_INT), INTENT(OUT) :: nx, ny, nz, ierr
+            END SUBROUTINE H5IO_GET_MODEL_DIMENSIONSF
+
+            SUBROUTINE H5IO_READ_MODELF(comm, fileID,              &
+                                        ix0, iy0, iz0,             &
+                                        nxloc, nyloc, nzloc,       &
+                                        xlocs, ylocs, zlocs, ierr) &
+                       BIND(C, NAME='eikonal_h5io_readModelF')
+            USE ISO_C_BINDING
+            IMPLICIT NONE
+            INTEGER(C_LONG), INTENT(IN) :: fileID
+            INTEGER(C_INT), INTENT(IN) :: comm, ix0, iy0, iz0, &
+                                          nxloc, nyloc, nzloc
+            REAL(C_FLOAT), INTENT(OUT) :: xlocs(nxloc*nyloc*nzloc), &
+                                          ylocs(nxloc*nyloc*nzloc), &
+                                          zlocs(nxloc*nyloc*nzloc)
+            INTEGER(C_INT), INTENT(OUT) :: ierr
+            END SUBROUTINE H5IO_READ_MODELF
+
             SUBROUTINE H5IO_READ_TRAVELTIMESF(comm, tttFileID,        &
                                               station, model, iphase, &
                                               ix0f, iy0f, iz0f,       &

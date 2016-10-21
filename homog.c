@@ -57,7 +57,8 @@ int main(int argc, char **argv)
     const int master = 0;
     const int model = 1;
     const int ireord = 1; // Reorder the communicator
-    const int iwt = 1;    // Use heuristic waiting 
+    const int iwt = 0;    // Dont weight
+    const int locJob = 1; 
     //------------------------------------------------------------------------//
     //
     // Initialize mpi
@@ -424,19 +425,29 @@ int main(int argc, char **argv)
                                       dx, dy, dz,
                                       &locFileID);
     // I am now ready to locate some earthquakes
-   int iverb = 0;
-    locate3d_initialize(&globalCommInt, &iverb, &nx, &ny, &nz,
+int iverb = 0;
+/*
+    locate3d_initialize(&globalCommInt, &iverb, (long *) &tttFileID, (long *) &locFileID,
                         &ndivx, &ndivy, &ndivz, &ierr);
+*/
     if (ierr != 0)
     {
         printf("%s: Failed to initialize locator\n", fcnm);
         MPI_Abort(MPI_COMM_WORLD, 30);
     }
     // Call the locator
-
+/*
+    locate3d_gridsearch(&tttFileID, &locFileID,
+                        &model, 
+                        &locJob, &catalog.nobs, &catalog.nevents,
+                        catalog.luseObs, catalog.statCor, 
+                        catalog.tori, catalog.varobs,
+                        catalog.tobs, catalog.hypo, ierr); 
+*/
     // Finalize
-    eikonal_h5io_finalize(MPI_COMM_WORLD, &tttFileID);
-    eikonal_h5io_finalize(MPI_COMM_WORLD, &locFileID);
+    //locate3d_finalize();
+    eikonal_h5io_finalize(intraTableComm, &tttFileID);
+    eikonal_h5io_finalize(intraTableComm, &locFileID);
     freeStations(&stations);
     freeCatalog(&catalog);
     if (vpmod != NULL){free(vpmod);}

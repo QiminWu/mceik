@@ -9,7 +9,7 @@ endif
 
 XFSM2D = xfsm2d
 XFSM3D = xfsm3d
-XLOC = xloc
+#XLOC = xloc
 XHOMOG = xhomog
 
 EXECS = $(XFSM3D) $(XLOC) $(XHOMOG)
@@ -33,8 +33,8 @@ $(XFSM2D): $(OBJ2D)
 $(XFSM3D): $(OBJ3D)
 	$(MPIF90) $(FFLAGS) -o $(XFSM3D) $(OBJ3D) $(LIBALL)
 
-$(XLOC): $(OBJLOC)
-	$(MPIF90) $(FFLAGS) -o $(XLOC) $(OBJLOC) $(LIBALL)
+#$(XLOC): $(OBJLOC)
+#	$(MPICC) $(CFLAGS) -o $(XLOC) $(OBJLOC) $(LIBALL)
 
 $(OBJ)/broadcast.o: broadcast.c
 	$(MPICC) $(CFLAGS) $(INC_ALL) -c broadcast.c -o $(OBJ)/broadcast.o

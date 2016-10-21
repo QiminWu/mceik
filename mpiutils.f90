@@ -108,13 +108,15 @@
       INTEGER, INTENT(OUT) :: global_comm, intra_table_comm, &
                               inter_table_comm, ierr
       ! local variables
-      INTEGER, ALLOCATABLE :: dsts(:), iwts(:), srcs(:)
+      INTEGER, ALLOCATABLE :: dstwts(:), dsts(:), iwts(:), srcs(:), srcwts(:)
       INTEGER i, idivx, idivy, idivz, info, ixn, j, jyn, k, kzn, &
               master_block_id, mpierr, &
-              myblock_id, myid, mytable_id, nblocks, ncomm, neigh, nprocs, ntables
+              myblock_id, myid, mytable_id, nblocks, ncomm, ndst, &
+              neigh, nprocs, nsrc, ntables
       INTEGER, PARAMETER :: wts(27) = [1, 2, 1,  2, 3, 2,  1, 2, 1, & ! base
                                        2, 3, 2,  3, 0, 3,  2, 3, 2, & ! middle
                                        1, 2, 1,  2, 3, 2,  1, 2, 1]   ! top
+      LOGICAL, PARAMETER :: dupComm = .TRUE.
       IF (linitComm) THEN
          WRITE(*,*) 'mpiutils_splitcomm3d: Warning communicator already initialized'
       ENDIF
@@ -155,6 +157,8 @@
       ENDIF
       ! set space and intiailize
       ncomm = 0
+      nsrc = 0
+      ndst = 0
       ALLOCATE(dsts(nprocs)) !27 + ntables - 1))
       ALLOCATE(iwts(nprocs)) !27 + ntables - 1))
       ALLOCATE(srcs(nprocs)) !27 + ntables - 1))
@@ -173,9 +177,11 @@
                    jyn >= 0 .AND. jyn < ndivy .AND. &
                    kzn >= 0 .AND. kzn < ndivz) THEN
                   ncomm = ncomm + 1
+                  ndst = ndst + 1
+                  nsrc = nsrc + 1
                   neigh = mytable_id*nblocks + kzn*ndivx*ndivy + jyn*ndivx + ixn
-                  dsts(ncomm) = neigh
-                  srcs(ncomm) = neigh
+                  dsts(ndst) = neigh
+                  srcs(nsrc) = neigh
                   iwts(ncomm) = wts((k + 1)*9 + (j + 1)*3 + i + 2)
                ENDIF
     3       CONTINUE 
@@ -211,15 +217,32 @@
          iwts(ncomm) = 1
   700    CONTINUE
       ENDIF
-      IF (iwt == 0) iwts(1:ncomm) = 1 ! turn off weighting
-      CALL MPI_DIST_GRAPH_CREATE_ADJACENT(comm,                      &
-                                          ncomm, srcs, iwts,         &
-                                          ncomm, dsts, iwts,         &
-                                          info, lreord, global_comm, &
-                                          mpierr)
+      ALLOCATE(srcwts(ncomm))
+      ALLOCATE(dstwts(ncomm))
+      IF (iwt == 0) THEN
+         srcwts(1:ncomm) = 1
+         dstwts(1:ncomm) = 1
+      ELSE
+         srcwts(1:ncomm) = iwts(1:ncomm)
+         dstwts(1:ncomm) = iwts(1:ncomm)
+      ENDIF
+   
+print *, myid, srcs(1:ncomm), dsts(1:ncomm), srcwts, dstwts 
+      IF (dupComm) THEN
+print *, 'fix me'
+         CALL MPI_COMM_DUP(comm, global_comm, mpierr) 
+      ELSE
+         CALL MPI_DIST_GRAPH_CREATE_ADJACENT(comm,                      &
+                                             ncomm, srcs, srcwts,       &
+                                             ncomm, dsts, dstwts,       &
+                                             info, lreord, global_comm, &
+                                             mpierr)
+      ENDIF
       DEALLOCATE(dsts)
       DEALLOCATE(iwts)
       DEALLOCATE(srcs)
+      DEALLOCATE(srcwts)
+      DEALLOCATE(dstwts)
       ! now split the new communicator 
       CALL MPI_COMM_RANK(global_comm, myid, mpierr)
       CALL MPI_COMM_SPLIT(global_comm, mytable_id, myid, intra_table_comm, mpierr)

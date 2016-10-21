@@ -23,6 +23,29 @@ int eikonal_h5io_setFileName(enum fileName_enum job,
 /* Sets the traveltime table dataset name for the given station and model */
 void eikonal_h5io_setTravelTimeName(const int model, const int station,
                                     const bool isP, char dataSetName[512]);
+/* Get the model dimensions */
+void eikonal_h5io_getModelDimensionsF(const long *inFileID,
+                                      int *nx, int *ny, int *nz, 
+                                      int *ierr);
+int eikonal_h5io_getModelDimensions(const hid_t fileID,
+                                    int *nx, int *ny, int *nz);
+/* Read model */
+void eikonal_h5io_readModelF(const int *comm,
+                             const long *inFileID,
+                             const int *ix0, const int *iy0, const int *iz0, 
+                             const int *nxLoc, const int *nyLoc,
+                             const int *nzLoc,
+                             float *__restrict__ xlocs,
+                             float *__restrict__ ylocs,
+                             float *__restrict__ zlocs,
+                             int *ierr);
+int eikonal_h5io_readModel(const MPI_Comm comm,
+                           const hid_t fileID,
+                           const int ix0, const int iy0, const int iz0,
+                           const int nxLoc, const int nyLoc, const int nzLoc,
+                           float *__restrict__ xlocs,
+                           float *__restrict__ ylocs,
+                           float *__restrict__ zlocs);
 /* Initialize the HDF5 locations */
 int eikonal_h5io_initLocations(
     const MPI_Comm comm,
