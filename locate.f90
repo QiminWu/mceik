@@ -120,8 +120,6 @@
 !                                                                                        !
 !>    @brief Driver routine for earthquake location
 !>
-!>    @param[in] tttFileID    HDF5 handle for traveltime tables
-!>    @param[in] locFileID    HDF5 location file handle
 !>    @param[in] model        model number
 !>    @param[in] job          if job == 0 then compute the locations only.
 !>                            if job == 1 then compute the locations and origin times.
@@ -145,14 +143,14 @@
 !>
 !>    @copyright Apache 2
 !>
-      SUBROUTINE LOCATE3D_GRIDSEARCH(tttFileID, locFileID,  &
-                                     model,                 &
+      SUBROUTINE LOCATE3D_GRIDSEARCH(model,                 &
                                      job, nobs, nevents, &
-                                     luseObs, statCor,      &
+                                     luseObs, statPtr,  &
+                                     pickType, statCor,      &
                                      tori, varobs,          &
                                      tobs, test,            &
                                      hypo, ierr)      &
-                 BIND(C,NAME='locate3d_gridSearch')
+                 BIND(C,NAME='locate3d_gridsearch')
       USE MPI
       USE HDF5
       USE H5IO_MODULE, ONLY : H5IO_READ_TRAVELTIMESF
@@ -160,10 +158,12 @@
                                 COMPUTE_LOCATION_AND_ORIGIN_TIME, &
                                 COMPUTE_LOCATION_AND_STATICS,     &
                                 COMPUTE_LOCATION_ALL, zero, one, sqrt2i
-      USE LOCATE_TYPES, ONLY : locateType
+      USE MPIUTILS_MODULE, ONLY : global_comm, inter_table_comm, intra_table_comm
+      USE LOCATE_MODULE, ONLY : locate, parms
       USE ISO_C_BINDING
-      INTEGER(C_INT), INTENT(IN) :: job, locfileID, model, nobs, nevents, tttFileID
-      INTEGER(C_INT), INTENT(IN) :: luseObs(nevents*nobs)
+      INTEGER(C_INT), INTENT(IN) :: job, model, nobs, nevents
+      INTEGER(C_INT), INTENT(IN) :: luseObs(nevents*nobs), pickType(nevents*nobs), &
+                                    statPtr(nevents*nobs)
       REAL(C_DOUBLE), INTENT(IN) :: statCor(nobs), tori(nevents),       &
                                     varobs(nevents*nobs), tobs(nevents*nobs)
       REAL(C_DOUBLE), INTENT(OUT) :: hypo(4*nevents), test(nevents*nobs)
@@ -171,20 +171,22 @@
       DOUBLE PRECISION, ALLOCATABLE :: logPDF(:), logPDFbuf(:), t0(:), t0buf(:)
       REAL, ALLOCATABLE :: test4(:)
       DOUBLE PRECISION res, tobs_i, xnorm, wt_i, wt_i_sqrt2i
-      INTEGER igrd, isrc
+      INTEGER igrd, isrc, myblockID, ntableGroups, tableID
       INTEGER, PARAMETER :: master = 0
-TYPE(locateType) :: locate
       !----------------------------------------------------------------------------------!
       ierr = 0
-      hypo(1:4*nevents) = zero
-      nobs_groups = 1
+!     hypo(1:4*nevents) = zero
       npdomain = 1
       mydomain_id = 0
       myobs_id = 0
+      CALL MPI_COMM_SIZE(inter_table_comm, ntableGroups, mpierr)
+      CALL MPI_COMM_RANK(inter_table_comm, tableID, mpierr)
+      CALL MPI_COMM_RANK(intra_table_comm, myblockID, mpierr)
       !CALL MPI_COMM_RANK(obs_comm,    myobs_id,    mpierr) ! 
       !CALL MPI_COMM_RANK(domain_comm, mydomain_id, mpierr) ! block of domain 
       !CALL MPI_COMM_SIZE(obs_comm,    nobs_groups, mpierr) ! observations groups
       !CALL MPI_COMM_SIZE(domain_comm, npdomain,    mpierr) ! processors in domain
+      ngrd = locate%ngrd
       ALLOCATE(logPDF(ngrd))
       ALLOCATE(logPDFbuf(ngrd))
       ALLOCATE(test4(ngrd))
@@ -198,26 +200,29 @@ TYPE(locateType) :: locate
          DO 1 isrc=1,nevents
             logPDF(:) = zero
             logPDFbuf(:) = zero
-cycle
             ! compute the analytic origin time (e.g. moser 1992 eqn 19)
             IF (job == COMPUTE_LOCATION_AND_ORIGIN_TIME) THEN
+               IF (ALLOCATED(t0buf)) deallocate(t0buf)
                ALLOCATE(t0buf(ngrd))
                t0buf(:) = zero 
                t0(:) = zero
-               ! load test4 from disk
-               CALL H5IO_READ_TRAVELTIMESF(MPI_COMM_WORLD, tttFileID,                &   
-                                           iobs, model, iphase,                      &   
-                                           locate%ix0, locate%iy0, locate%iz0,       &   
-                                           locate%nxLoc, locate%nyLoc, locate%nzLoc, &
-                                           test4, ierr)
-               IF (ierr /= 0) THEN
-                  WRITE(*,*) 'Error reading observed traveltimes 1'
-                  GOTO 500 
-               ENDIF
                ! tabulate the common residual
-               DO 2 iobs=1,nobs
+               DO 2 iobs=1,nobs,ntableGroups
                   myobs = (isrc - 1)*nobs + iobs
+                  IF (iobs + tableID > nobs) CYCLE
                   IF (luseObs(iobs) == 0) CYCLE
+                  ! load the estimates from disk
+                  istat = statPtr(myobs)
+                  iphase = pickType(myobs)
+                  CALL H5IO_READ_TRAVELTIMESF(intra_table_comm, parms%tttFileID,        &
+                                              istat, model, iphase,                     &
+                                              locate%ix0, locate%iy0, locate%iz0,       &
+                                              locate%nxLoc, locate%nyLoc, locate%nzLoc, &
+                                              test4, ierr)
+                  IF (ierr /= 0) THEN
+                     WRITE(*,*) 'Error reading observed traveltimes 1'
+                     GOTO 500 
+                  ENDIF
                   tobs_i =   tobs(myobs) - statCor(iobs)
                   wt_i   = varobs(myobs)
                   IF (wt_i > zero) THEN
@@ -231,29 +236,34 @@ cycle
                ! normalize by the sum of the weights which is equivalent to scaling
                ! by the sum of the data variances
                xnorm = zero
-               IF (SUM(luseObs((isrc-1)*nobs+1:isrc*nobs)) == 0) THEN
-                  xnorm = SUM(varobs((isrc-1)*nobs+1:isrc*nobs))
-                  CALL DSCAL(ngrd, xnorm, t0buff, 1) ! divide by the sum of the weights
+               iobs1 = (isrc-1)*nobs+1
+               iobs2 = isrc*nobs
+               IF (SUM(luseObs(iobs1:iobs2)) > 0) THEN
+                  xnorm = SUM(varobs(iobs1:iobs2))
+                  CALL DSCAL(ngrd, xnorm, t0buf, 1) ! divide by the sum of the weights
                ENDIF
                ! add up the common residual (which is the origin time at each grid point)
-               !CALL MPI_ALLREDUCE(t0buf, t0, MPI_DOUBLE_PRECISION, MPI_SUM, &
-               !                   domain_comm, mpierr)
+               CALL MPI_ALLREDUCE(t0buf, t0, ngrd, MPI_DOUBLE_PRECISION, MPI_SUM, &
+                                  inter_table_comm, mpierr)
             ELSE
                t0(:) = tori(isrc)
             ENDIF
             ! stack the residuals for this event
-            DO 4 iobs=1,nobs,nobs_groups
+            DO 4 iobs=1,nobs,ntableGroups
                myobs = (isrc - 1)*nobs + iobs
+               IF (iobs + tableID > nobs) CYCLE
                IF (luseObs(iobs) == 0) CYCLE
-               ! load test4 from disk
-!              CALL H5IO_READ_TRAVELTIMESF(myobs_comm, tttFileID,                &
-!                                          iobs, model, iphase,                      &
-!                                          locate%ix0, locate%iy0, locate%iz0,       &
-!                                          locate%nxLoc, locate%nyLoc, locate%nzLoc, &
-!                                          test4, ierr)
+               ! load the estimates from disk
+               istat = statPtr(myobs)
+               iphase = pickType(myobs)
+               CALL H5IO_READ_TRAVELTIMESF(intra_table_comm, parms%tttFileID,        &
+                                           istat, model, iphase,                     &
+                                           locate%ix0, locate%iy0, locate%iz0,       &
+                                           locate%nxLoc, locate%nyLoc, locate%nzLoc, &
+                                           test4, ierr)
                IF (ierr /= 0) THEN
-                  WRITE(*,*) 'Error reading observed traveltimes 2'
-                  GOTO 500
+                  WRITE(*,*) 'Error reading observed traveltimes 1'
+                  GOTO 500 
                ENDIF
                ! set the observations and weights 
                tobs_i = tobs(myobs) - statCor(iobs)
@@ -268,10 +278,11 @@ cycle
                !$OMP END DO SIMD
     4       CONTINUE
             ! reduce the log of PDFs onto the first observation group
-            !CALL MPI_REDUCE(logPDFbuf, logPDF, ngrd, MPI_DOUBLE_PRECISION, MPI_SUM, master, &
-            !                cross_comm, mpierr)
+            CALL MPI_REDUCE(logPDFbuf, logPDF, ngrd, MPI_DOUBLE_PRECISION, MPI_SUM, &
+                            master, inter_table_comm, mpierr)
             ! now the head group can locate the event
-            IF (mydomain_id == master) THEN
+            IF (tableID == master) THEN
+               print *, minval(logPDF), maxval(logPDF)
 !              hypo(4*(isrc-1)+1) = xhypo
 !              hypo(4*(isrc-1)+2) = yhypo
 !              hypo(4*(isrc-1)+3) = zhypo
@@ -375,8 +386,8 @@ cycle
          parms%ndivx = ndivx
          parms%ndivy = ndivy
          parms%ndivz = ndivz
-         !parms%locFileID = locFileID
-         !parms%tttFileID = tttFileID
+         parms%locFileID = locFileID
+         parms%tttFileID = tttFileID
       ENDIF
       CALL MPI_BCAST(parms%iverb, 1, MPI_INTEGER, master, comm, mpierr)
       CALL MPI_BCAST(parms%nx,    1, MPI_INTEGER, master, comm, mpierr)
@@ -385,6 +396,8 @@ cycle
       CALL MPI_BCAST(parms%ndivx, 1, MPI_INTEGER, master, comm, mpierr)
       CALL MPI_BCAST(parms%ndivy, 1, MPI_INTEGER, master, comm, mpierr)
       CALL MPI_BCAST(parms%ndivz, 1, MPI_INTEGER, master, comm, mpierr)
+      CALL MPI_BCAST(parms%locFileID, 1, MPI_LONG_LONG, master, comm, mpierr)
+      CALL MPI_BCAST(parms%tttFileID, 1, MPI_LONG_LONG, master, comm, mpierr)
       IF (.NOT.linitComm) THEN
          WRITE(*,*) 'locate_initialize3d: Splitting communicator...'
          CALL MPIUTILS_INITIALIZE3D(comm, ireord, iwt,                     &
@@ -426,8 +439,8 @@ cycle
       locate%iy0 = j1
       locate%iz0 = k1
       ! verify i got 'em all
-      nall = locate%nxLoc*locate%nyLoc*locate%nzLoc
-      CALL MPI_REDUCE(nall, ngrdAll, 1, MPI_INTEGER, MPI_SUM, master, comm, mpierr)
+      locate%ngrd = locate%nxLoc*locate%nyLoc*locate%nzLoc
+      CALL MPI_REDUCE(locate%ngrd, ngrdAll, 1, MPI_INTEGER, MPI_SUM, master, comm, mpierr)
       IF (myid == master) THEN
          IF (nx*ny*nz /= ngrdAll) THEN
             WRITE(*,*) 'locate3d_initialize: Failed to split grid', nall, ngrdAll 
@@ -435,9 +448,9 @@ cycle
          ENDIF
       ENDIF
       ! load the model grid - these are my locations
-      ALLOCATE(locate%xlocs(MAX(1, locate%nxLoc)))
-      ALLOCATE(locate%ylocs(MAX(1, locate%nyLoc)))
-      ALLOCATE(locate%zlocs(MAX(1, locate%nzLoc)))
+      ALLOCATE(locate%xlocs(MAX(1, locate%ngrd)))
+      ALLOCATE(locate%ylocs(MAX(1, locate%ngrd)))
+      ALLOCATE(locate%zlocs(MAX(1, locate%ngrd)))
       locate%xlocs(:) = REAL(zero)
       locate%ylocs(:) = REAL(zero)
       locate%zlocs(:) = REAL(zero)
@@ -450,6 +463,7 @@ cycle
          WRITE(*,*) 'locate3d_initialize: Error reading model'
          ierr = 1
       ENDIF
+      parms%linit = .TRUE.
       RETURN
       END
 !                                                                                        !
@@ -457,7 +471,11 @@ cycle
 !                                                                                        !
       SUBROUTINE LOCATE3D_FINALIZE() &
                  BIND(C,NAME='locate3d_finalize')
-
+      USE LOCATE_MODULE, ONLY : locate, parms
+      IF (ALLOCATED(locate%xlocs)) DEALLOCATE(locate%xlocs)
+      IF (ALLOCATED(locate%ylocs)) DEALLOCATE(locate%ylocs)
+      IF (ALLOCATED(locate%zlocs)) DEALLOCATE(locate%zlocs)
+      parms%linit = .FALSE.
       RETURN
       END
 !                                                                                        !
