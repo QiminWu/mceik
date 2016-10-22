@@ -127,17 +127,17 @@ void broadcast_catalog(MPI_Comm comm, const int root,
         catalog->xsrc = (double *) calloc((size_t) nevents, sizeof(double));
         catalog->ysrc = (double *) calloc((size_t) nevents, sizeof(double));
         catalog->zsrc = (double *) calloc((size_t) nevents, sizeof(double));
-        catalog->t0   = (double *) calloc((size_t) nevents, sizeof(double));
+        catalog->tori = (double *) calloc((size_t) nevents, sizeof(double));
         catalog->tobs = (double *) calloc((size_t) nwork,   sizeof(double));
         catalog->test = (double *) calloc((size_t) nwork,   sizeof(double));
-        catalog->var  = (double *) calloc((size_t) nwork,   sizeof(double));
+        catalog->varObs  = (double *) calloc((size_t) nwork,   sizeof(double));
     }
     MPI_Bcast(catalog->xsrc, nevents, MPI_DOUBLE, root, comm);
     MPI_Bcast(catalog->ysrc, nevents, MPI_DOUBLE, root, comm);
     MPI_Bcast(catalog->zsrc, nevents, MPI_DOUBLE, root, comm);
-    MPI_Bcast(catalog->t0,   nevents, MPI_DOUBLE, root, comm);
+    MPI_Bcast(catalog->tori, nevents, MPI_DOUBLE, root, comm);
     MPI_Bcast(catalog->tobs, nwork,   MPI_DOUBLE, root, comm);
     MPI_Bcast(catalog->test, nwork,   MPI_DOUBLE, root, comm);
-    MPI_Bcast(catalog->var,  nwork,   MPI_DOUBLE, root, comm);
+    MPI_Bcast(catalog->varObs,  nwork,   MPI_DOUBLE, root, comm);
     return;
 }

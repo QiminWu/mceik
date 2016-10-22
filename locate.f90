@@ -168,7 +168,7 @@
                                     varobs(nevents*nobs), tobs(nevents*nobs)
       REAL(C_DOUBLE), INTENT(OUT) :: hypo(4*nevents), test(nevents*nobs)
       INTEGER(C_INT), INTENT(OUT) :: ierr
-      DOUBLE PRECISION, ALLOCATABLE :: logPDF(:), logPDFbuf(:), t0(:), t0buf(:)
+      DOUBLE PRECISION, ALLOCATABLE :: logPDF(:), logPDFbuf(:), objbuf(:), objloc(:), t0(:), t0buf(:)
       REAL, ALLOCATABLE :: test4(:)
       DOUBLE PRECISION res, tobs_i, xnorm, wt_i, wt_i_sqrt2i
       INTEGER igrd, isrc, myblockID, ntableGroups, tableID
@@ -181,6 +181,7 @@
       myobs_id = 0
       CALL MPI_COMM_SIZE(inter_table_comm, ntableGroups, mpierr)
       CALL MPI_COMM_RANK(inter_table_comm, tableID, mpierr)
+      CALL MPI_COMM_SIZE(intra_table_comm, nblocks, mpierr)
       CALL MPI_COMM_RANK(intra_table_comm, myblockID, mpierr)
       !CALL MPI_COMM_RANK(obs_comm,    myobs_id,    mpierr) ! 
       !CALL MPI_COMM_RANK(domain_comm, mydomain_id, mpierr) ! block of domain 
@@ -191,6 +192,8 @@
       ALLOCATE(logPDFbuf(ngrd))
       ALLOCATE(test4(ngrd))
       ALLOCATE(t0(ngrd))
+      ALLOCATE(objloc(nblocks))
+      ALLOCATE(objbuf(nblocks))
       logPDF(:) = zero
       logPDFbuf(:) = zero
       t0(:) = zero
@@ -282,7 +285,20 @@
                             master, inter_table_comm, mpierr)
             ! now the head group can locate the event
             IF (tableID == master) THEN
-               print *, minval(logPDF), maxval(logPDF)
+               ioptLoc = MAXLOC(logPDF, 1)
+               objbuf(:) =-DBLE(1.d0)
+               objbuf(myblockID+1) = logPDF(ioptLoc)
+               CALL MPI_ALLREDUCE(objbuf, objloc, nblocks, MPI_DOUBLE_PRECISION, &
+                                 MPI_MAX, intra_table_comm, mpierr) 
+               ioptBlock = MAXLOC(objloc, 1) - 1
+               IF (ioptBlock == myblockID) THEN
+                  print *, logPDF(ioptLoc)
+                  hypo(4*(isrc-1)+1) = locate%xlocs(ioptLoc)
+                  hypo(4*(isrc-1)+2) = locate%ylocs(ioptLoc)
+                  hypo(4*(isrc-1)+3) = locate%zlocs(ioptLoc)
+                  hypo(4*(isrc-1)+4) = t0(ioptLoc)
+print *, hypo(4*(isrc-1)+1), hypo(4*(isrc-1)+2), hypo(4*(isrc-1)+3), hypo(4*(isrc-1)+4)
+               ENDIF
 !              hypo(4*(isrc-1)+1) = xhypo
 !              hypo(4*(isrc-1)+2) = yhypo
 !              hypo(4*(isrc-1)+3) = zhypo

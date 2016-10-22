@@ -442,6 +442,8 @@
          END TYPE locateType
 
          TYPE locateParametersType
+            INTEGER(KIND=8) locFileID
+            INTEGER(KIND=8) tttFileID
             INTEGER iverb
             INTEGER ndivx
             INTEGER ndivy
@@ -449,6 +451,7 @@
             INTEGER nx
             INTEGER ny
             INTEGER nz
+            LOGICAL linit
          END TYPE locateParametersType
       END MODULE LOCATE_TYPES
 
@@ -509,10 +512,11 @@
                        BIND(C, NAME='eikonal_h5io_readTraveltimesF')
             USE ISO_C_BINDING
             IMPLICIT NONE
+            INTEGER(C_LONG), INTENT(IN) :: tttFileID
             INTEGER(C_INT), INTENT(IN) :: comm, ix0f, iy0f, iz0f, &
                                           iphase, model,          &
                                           nxLoc, nyLoc, nzLoc,    &
-                                          station, tttFileID
+                                          station
             REAL(C_FLOAT), INTENT(OUT) :: ttimes(nxLoc*nyLoc*nzLoc)
             INTEGER(C_INT), INTENT(OUT) :: ierr
             END SUBROUTINE H5IO_READ_TRAVELTIMESF

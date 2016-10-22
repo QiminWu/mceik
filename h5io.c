@@ -1159,8 +1159,8 @@ int eikonal_h5io_readModel(const MPI_Comm comm,
 /*!
  * @brief Fortran interface to H5 reader
  */
-void eikonal_h5io_readTraveltimesF(MPI_Fint *comm,
-                                   int *tttFileID,
+void eikonal_h5io_readTraveltimesF(const int *comm,
+                                   const long *tttFileID,
                                    const int *station, const int *model,
                                    const int *iphase,
                                    const int *ix0f, const int *iy0f,
@@ -1172,9 +1172,10 @@ void eikonal_h5io_readTraveltimesF(MPI_Fint *comm,
     const char *fcnm = "eikonal_h5io_readTraveltimesF\0";
     MPI_Comm mpiComm = MPI_Comm_f2c(*comm);
     hid_t fileID = (hid_t) *tttFileID;
-    int ix0 = *ix0f - 1;
-    int iy0 = *iy0f - 1;
-    int iz0 = *iz0f - 1;
+    int ix0, iy0, iz0;
+    ix0 = *ix0f - 1;
+    iy0 = *iy0f - 1;
+    iz0 = *iz0f - 1;
     *ierr = 0;
     *ierr = eikonal_h5io_readTravelTimes(mpiComm,
                                          fileID,

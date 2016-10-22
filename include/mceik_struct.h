@@ -12,12 +12,12 @@ struct mceik_catalog_struct
     double *xsrc;  /*!< x source ordinate (m) or longitude (deg) [nevents] */
     double *ysrc;  /*!< y source ordinate (m) or latitude (deg) [nevents] */
     double *zsrc;  /*!< station elevation (m) above base of model [nevents] */
-    double *t0;    /*!< Epochal origin time (s) [nevents] */
+    double *tori;  /*!< Epochal origin time (s) [nevents] */
     double *tobs;  /*!< Observed epochal pick times (s) [obsptr[nevents]-1] */
     double *test;  /*!< Estimate epochal pick times (s) corresponding to the
                         source at (xsrc,ysrc,zsrc,t0) [obsptr[nevents]-1] */
-    double *var;   /*!< Variance (s) in the i'th observations
-                        [obsptr[nevents-1] */
+    double *varObs;   /*!< Variance (s) in the i'th observations
+                           [obsptr[nevents-1] */
     int *luseObs;  /*!< If 0 then the i'th observation is not used 
                         [obsptr[nevents-1] */
     int *pickType; /*!< Phase identifier (P=1) or (S=2) for i'th observation

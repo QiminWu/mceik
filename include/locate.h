@@ -12,12 +12,13 @@ void locate3d_initialize(const int *comm, const int *iverb,
                          const int *ndivx, const int *ndivy, const int *ndivz,
                          int *ierr);
 
-void locate3d_gridsearch(const int *tttFileID, const int *locFileID,
-                         const int *model,
-                         const int *job, const int *ngrd, const int *nsrc,
-                         const int *luseObs, const double *statCor,
+void locate3d_gridsearch(const int *model,
+                         const int *job, const int *nobs, const int *nevents,
+                         const int *luseObs, const int *statPtr,
+                         const int *pickType, const double *statCor,
                          const double *tori, const double *varobs,
-                         const double *tobs, double *hypo, int *ierr);
+                         const double *tobs, double *test,
+                         double *hypo, int *ierr);
 
 void locate3d_finalize(void);
 

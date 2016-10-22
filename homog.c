@@ -58,7 +58,7 @@ int main(int argc, char **argv)
     const int model = 1;
     const int ireord = 1; // Reorder the communicator
     const int iwt = 0;    // Dont weight
-    const int locJob = 1; 
+    const int locJob = 2; 
     //------------------------------------------------------------------------//
     //
     // Initialize mpi
@@ -182,11 +182,11 @@ int main(int argc, char **argv)
                        calloc((size_t) catalog.nevents, sizeof(double));
         catalog.zsrc = (double *)
                        calloc((size_t) catalog.nevents, sizeof(double));
-        catalog.t0 = (double *)
-                     calloc((size_t) catalog.nevents, sizeof(double));
+        catalog.tori = (double *)
+                       calloc((size_t) catalog.nevents, sizeof(double));
         catalog.tobs = (double *) calloc((size_t) nwork, sizeof(double));
         catalog.test = (double *) calloc((size_t) nwork, sizeof(double));
-        catalog.var =  (double *) calloc((size_t) nwork, sizeof(double));
+        catalog.varObs =  (double *) calloc((size_t) nwork, sizeof(double));
         catalog.luseObs  = (int *) calloc((size_t) nwork, sizeof(int));
         catalog.pickType = (int *) calloc((size_t) nwork, sizeof(int));
         catalog.statPtr  = (int *) calloc((size_t) nwork, sizeof(int));
@@ -210,12 +210,12 @@ int main(int argc, char **argv)
                     if (iphase == P_PRIMARY_PICK)
                     {
                         catalog.tobs[nkeep] = dist/const_vp;
-                        catalog.var[nkeep] = varVp;
+                        catalog.varObs[nkeep] = varVp;
                     }
                     else if (iphase == S_PRIMARY_PICK)
                     {
                         catalog.tobs[nkeep] = dist/const_vs;
-                        catalog.var[nkeep] = varVs;
+                        catalog.varObs[nkeep] = varVs;
                     }
                     else
                     {
@@ -224,7 +224,7 @@ int main(int argc, char **argv)
                     }
                     catalog.luseObs[nkeep] = 1;
                     catalog.pickType[nkeep] = iphase;
-                    catalog.statPtr[nkeep] = k;
+                    catalog.statPtr[nkeep] = k + 1;
                     nkeep = nkeep + 1;
                 }
                 // Do i have a P and S phase?
@@ -426,26 +426,27 @@ int main(int argc, char **argv)
                                       &locFileID);
     // I am now ready to locate some earthquakes
 int iverb = 0;
-/*
-    locate3d_initialize(&globalCommInt, &iverb, (long *) &tttFileID, (long *) &locFileID,
+    locate3d_initialize(&intraTableComm, &iverb,
+                        (long *) &tttFileID, (long *) &locFileID,
                         &ndivx, &ndivy, &ndivz, &ierr);
-*/
     if (ierr != 0)
     {
         printf("%s: Failed to initialize locator\n", fcnm);
         MPI_Abort(MPI_COMM_WORLD, 30);
     }
     // Call the locator
-/*
-    locate3d_gridsearch(&tttFileID, &locFileID,
-                        &model, 
-                        &locJob, &catalog.nobs, &catalog.nevents,
-                        catalog.luseObs, catalog.statCor, 
-                        catalog.tori, catalog.varobs,
-                        catalog.tobs, catalog.hypo, ierr); 
-*/
+double *hypo = (double *)calloc((size_t) catalog.nevents*4, sizeof(double));
+int nobs = 2*stations.nstat;
+double *statCor = (double *)calloc((size_t) nobs, sizeof(double));
+    locate3d_gridsearch(&model,
+                        &locJob, &nobs, &catalog.nevents,
+                        catalog.luseObs, catalog.statPtr,
+                        catalog.pickType, statCor,
+                        catalog.tori, catalog.varObs,
+                        catalog.tobs, catalog.test,
+                        hypo, &ierr);
     // Finalize
-    //locate3d_finalize();
+    locate3d_finalize();
     eikonal_h5io_finalize(intraTableComm, &tttFileID);
     eikonal_h5io_finalize(intraTableComm, &locFileID);
     freeStations(&stations);
@@ -471,10 +472,10 @@ void freeCatalog(struct mceik_catalog_struct *catalog)
     if (catalog->xsrc     != NULL){free(catalog->xsrc);}
     if (catalog->ysrc     != NULL){free(catalog->ysrc);}
     if (catalog->zsrc     != NULL){free(catalog->zsrc);}
-    if (catalog->t0       != NULL){free(catalog->t0);}
+    if (catalog->tori     != NULL){free(catalog->tori);}
     if (catalog->tobs     != NULL){free(catalog->tobs);}
     if (catalog->test     != NULL){free(catalog->test);}
-    if (catalog->var      != NULL){free(catalog->var);}
+    if (catalog->varObs   != NULL){free(catalog->varObs);}
     if (catalog->luseObs  != NULL){free(catalog->luseObs);}
     if (catalog->pickType != NULL){free(catalog->pickType);}
     if (catalog->statPtr  != NULL){free(catalog->statPtr);}
