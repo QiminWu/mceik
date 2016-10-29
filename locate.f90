@@ -115,6 +115,182 @@
       DEALLOCATE(xopt) 
       RETURN
       END
+
+      SUBROUTINE VERIF_MODEL(iphase, nx, ny, nz, ttimes4)
+      USE ISO_C_BINDING
+      INTEGER, INTENT(IN) :: iphase, nx, ny, nz
+      REAL, INTENT(IN) :: ttimes4(nx*ny*nz)
+      INTERFACE
+         INTEGER(C_INT) FUNCTION computeHomogeneousTraveltimes_finter( &
+                                    nx, ny, nz, &
+                                    x0, y0, z0, &
+                                    dx, dy, dz, &
+                                    xs, ys, zs, &
+                                    vel, ttimes) &
+                        BIND(C, NAME='computeHomogeneousTraveltimes_finter')
+         USE ISO_C_BINDING 
+         INTEGER(C_INT), INTENT(IN) :: nx, ny, nz
+         REAL(C_DOUBLE), INTENT(IN) :: x0, y0, z0, dx, dy, dz, xs, ys, zs, vel
+         REAL(C_DOUBLE), INTENT(OUT) :: ttimes(nx*ny*nz)
+         END
+      END INTERFACE 
+      REAL(C_DOUBLE), ALLOCATABLE :: ttimes(:)
+      REAL(C_DOUBLE) dx, dy, dz, vel, x0, y0, z0, xs, ys, zs
+      INTEGER(C_INT) ierr
+      INTEGER i, igrd, ix, iy, iz
+      dx = 1.d3
+      dy = 1.d3
+      dz = 1.d3
+      x0 = 0.d0
+      y0 = 0.d0
+      z0 = 0.d0
+      IF (iphase == 1) THEN
+         vel = 2.d3
+      ELSE
+         vel = 2.d3/DSQRT(3.d0)
+      ENDIF
+      xs = 0.d0
+      ys = 0.d0
+      zs = 0.d0
+      igrd = MINLOC(ttimes4, 1)
+      DO iz=1,nz
+         DO iy=1,ny
+            DO ix=1,nx
+               IF ((iz-1)*nx*ny + (iy-1)*nx + ix == igrd) THEN
+                  xs = x0 + (ix - 1)*dx
+                  ys = y0 + (iy - 1)*dy
+                  zs = z0 + (iz - 1)*dz
+               ENDIF
+            ENDDO
+         ENDDO
+      ENDDO
+      ALLOCATE(ttimes(nx*ny*nz))
+      ierr = computeHomogeneousTraveltimes_finter(nx, ny, nz, &
+                                                  x0, y0, z0, &
+                                                  dx, dy, dz, &
+                                                  xs, ys, zs, &
+                                                  vel, ttimes)
+      DO i=1,nx*ny*nz
+         IF (ABS(ttimes(i) - ttimes4(i)) > 1.d-5) THEN
+            WRITE(*,*) 'model mismatch:', ttimes(i), ttimes4(i)
+            ierr = 1
+            RETURN
+         ENDIF
+      ENDDO
+      WRITE(*,*) 'Model is okay', MAXVAL(ABS(ttimes - ttimes4))
+      DEALLOCATE(ttimes) 
+      RETURN
+      END
+
+      SUBROUTINE LOCATE3D_SET_TTABLES_FROM_FILE( )
+
+      END
+
+      SUBROUTINE LOCATE3D_SET_TTABLE_FROM_FILE(ngrd, iphase, istat, &
+                                               model, test4, ierr)
+      USE MPIUTILS_MODULE, ONLY : global_comm, inter_table_comm, intra_table_comm
+      USE H5IO_MODULE, ONLY : H5IO_READ_TRAVELTIMESF
+      USE LOCATE_MODULE, ONLY : locate, parms
+      INTEGER, INTENT(IN) :: ngrd, iphase, istat, model
+      INTEGER, INTENT(OUT) :: ierr
+      REAL, INTENT(OUT) :: test4(ngrd)
+      INTEGER mpierr, myid
+      !----------------------------------------------------------------------------------!
+      ierr = 0
+      CALL MPI_COMM_RANK(intra_table_comm, myid, mpierr)
+      IF (iphase < 1 .OR. iphase > 2) THEN
+         WRITE(*,*) 'locate3d_set_ttable_from_file: Invalid phase', iphase, myid
+         ierr = 1
+      ENDIF
+      IF (model < 1) THEN
+         WRITE(*,*) 'locate3d_set_ttable_from_file: Invalid model', model, myid
+         ierr = 1
+      ENDIF
+      IF (istat < 1) THEN
+         WRITE(*,*) 'locate3d_set_ttable_from_file: Invalid station', istat, myid
+         ierr = 1
+      ENDIF
+      IF (ierr /= 0) RETURN
+      CALL H5IO_READ_TRAVELTIMESF(intra_table_comm, parms%tttFileID,        &
+                                  istat, model, iphase,                     &
+                                  locate%ix0, locate%iy0, locate%iz0,       &
+                                  locate%nxLoc, locate%nyLoc, locate%nzLoc, &
+                                  test4, ierr)
+      IF (ierr /= 0) THEN
+         WRITE(*,*) 'locate3d_set_ttable_from_file: Error reading traveltimes'
+         ierr = 1
+      ENDIF
+      RETURN
+      END SUBROUTINE
+
+      SUBROUTINE LOCATE3D_GRIDSEARCH_new( )
+      USE MPI
+      LOGICAL, ALLOCATABLE :: lhasTable(:)
+      INTEGER stat(MPI_STATUS_SIZE), nevGroups
+      INTEGER, PARAMETER :: master = 0
+      ntables = 4
+      nevGroups = 1
+      myevGroup = 0
+      IF (nevGroups == 1) THEN
+
+      ELSE
+         IF (myevGroup == master) THEN
+            ALLOCATE(lhasTable(nevGroups*ntables))
+            ALLOCATE(needTables(ntables))
+         ELSE
+            ALLOCATE(lhasTable(ntables))
+            ALLOCATE(needTables(ntables))
+         ENDIF
+         lhasTable(:) = .FALSE.
+         ! parallel loop on events
+         IF (myevGroup == master) THEN
+            DO 11 jev=1,nevents,nevGroups
+               ! 
+               IF (nevGroups > 1) THEN
+
+               ! just do it all myself
+               ELSE
+
+               ENDIF 
+   11       CONTINUE
+         ELSE
+            ! receive the event number
+            mysrc = myTableID
+            DO WHILE (.TRUE.)
+               CALL MPI_RECV(iev, 1, MPI_INTEGER, mysrc, MPI_ANY_TAG, &
+                             globalComm, stat, mpierr)
+               IF (iev < 0) EXIT ! i'm done
+               ! look through the catalog and see what tables i need
+               needTable(:) = 0
+               iobs1 = catptr(iev)
+               iobs2 = catptr(iev+1) - 1
+               nobs = iobs2 - iobs1 + 1
+               nneed = 0
+               DO 21 iobs=iobs1,iobs2
+                  itable = tablePtr(iobs)
+                  IF (lhasTable(itable)) THEN
+                     nneed = nneed + 1
+                     needTable(nneed) = itable
+                  ENDIF
+   21          CONTINUE
+               nneed = SUM(needTable) 
+               ! tell the master what tables i need
+               CALL MPI_SEND(nneed, 1, MPI_INTEGER)
+               IF (nneed > 0) THEN
+                  CALL MPI_SEND(needTable, nneed, MPI_INTEGER)
+               ENDIF
+               ! now receive my tables
+               DO 22 ineed=1,nneed
+                  itable = needTable(ineed)
+                  igrd1 = (itable - 1)*ngrd + 1
+                  igrd2 = itable*ngrd
+                  CALL MPI_RECV( )
+   22          CONTINUE
+            ENDDO
+         ENDIF
+         IF (ALLOCATED(lhasTable)) DEALLOCATE(lhasTable)
+      ENDIF
+      END SUBROUTINE
 !                                                                                        !
 !========================================================================================!
 !                                                                                        !
@@ -152,7 +328,6 @@
                                      hypo, ierr)      &
                  BIND(C,NAME='locate3d_gridsearch')
       USE MPI
-      USE HDF5
       USE H5IO_MODULE, ONLY : H5IO_READ_TRAVELTIMESF
       USE LOCATE_MODULE, ONLY : COMPUTE_LOCATION_ONLY,            &
                                 COMPUTE_LOCATION_AND_ORIGIN_TIME, &
@@ -161,6 +336,13 @@
       USE MPIUTILS_MODULE, ONLY : global_comm, inter_table_comm, intra_table_comm
       USE LOCATE_MODULE, ONLY : locate, parms
       USE ISO_C_BINDING
+      INTERFACE
+          SUBROUTINE DSCAL(n, alpha, x, incx)
+          INTEGER, INTENT(IN) :: n, incx
+          DOUBLE PRECISION, INTENT(IN) :: alpha 
+          DOUBLE PRECISION, INTENT(INOUT) :: x(n)
+          END SUBROUTINE DSCAL
+      END INTERFACE
       INTEGER(C_INT), INTENT(IN) :: job, model, nobs, nevents
       INTEGER(C_INT), INTENT(IN) :: luseObs(nevents*nobs), pickType(nevents*nobs), &
                                     statPtr(nevents*nobs)
@@ -170,8 +352,8 @@
       INTEGER(C_INT), INTENT(OUT) :: ierr
       DOUBLE PRECISION, ALLOCATABLE :: logPDF(:), logPDFbuf(:), objbuf(:), objloc(:), t0(:), t0buf(:)
       REAL, ALLOCATABLE :: test4(:)
-      DOUBLE PRECISION res, tobs_i, xnorm, wt_i, wt_i_sqrt2i
-      INTEGER igrd, isrc, myblockID, ntableGroups, tableID
+      DOUBLE PRECISION hypo4(4), res, tobs_i, xnorm, wt_i, wt_i_sqrt2i
+      INTEGER stat(MPI_STATUS_SIZE), igrd, isrc, globalID, myblockID, ntableGroups, tableID
       INTEGER, PARAMETER :: master = 0
       !----------------------------------------------------------------------------------!
       ierr = 0
@@ -201,8 +383,6 @@
       IF (job == COMPUTE_LOCATION_ONLY        .OR.    &
           job == COMPUTE_LOCATION_AND_ORIGIN_TIME) THEN
          DO 1 isrc=1,nevents
-            logPDF(:) = zero
-            logPDFbuf(:) = zero
             ! compute the analytic origin time (e.g. moser 1992 eqn 19)
             IF (job == COMPUTE_LOCATION_AND_ORIGIN_TIME) THEN
                IF (ALLOCATED(t0buf)) deallocate(t0buf)
@@ -251,7 +431,8 @@
             ELSE
                t0(:) = tori(isrc)
             ENDIF
-            ! stack the residuals for this event
+            ! stack the residuals for this event into the PDF
+            logPDFbuf(:) = zero
             DO 4 iobs=1,nobs,ntableGroups
                myobs = (isrc - 1)*nobs + iobs
                IF (iobs + tableID > nobs) CYCLE
@@ -286,23 +467,35 @@
             ! now the head group can locate the event
             IF (tableID == master) THEN
                ioptLoc = MAXLOC(logPDF, 1)
-               objbuf(:) =-DBLE(1.d0)
+               objbuf(:) =-HUGE(one)
+               hypo(:) = zero
                objbuf(myblockID+1) = logPDF(ioptLoc)
                CALL MPI_ALLREDUCE(objbuf, objloc, nblocks, MPI_DOUBLE_PRECISION, &
                                  MPI_MAX, intra_table_comm, mpierr) 
                ioptBlock = MAXLOC(objloc, 1) - 1
                IF (ioptBlock == myblockID) THEN
-                  print *, logPDF(ioptLoc)
-                  hypo(4*(isrc-1)+1) = locate%xlocs(ioptLoc)
-                  hypo(4*(isrc-1)+2) = locate%ylocs(ioptLoc)
-                  hypo(4*(isrc-1)+3) = locate%zlocs(ioptLoc)
-                  hypo(4*(isrc-1)+4) = t0(ioptLoc)
-print *, hypo(4*(isrc-1)+1), hypo(4*(isrc-1)+2), hypo(4*(isrc-1)+3), hypo(4*(isrc-1)+4)
+                  print *, logPDF(ioptLoc), ioptloc
+                  hypo4(1) = locate%xlocs(ioptLoc)
+                  hypo4(2) = locate%ylocs(ioptLoc)
+                  hypo4(3) = locate%zlocs(ioptLoc)
+                  hypo4(4) = t0(ioptLoc)
                ENDIF
-!              hypo(4*(isrc-1)+1) = xhypo
-!              hypo(4*(isrc-1)+2) = yhypo
-!              hypo(4*(isrc-1)+3) = zhypo
-!              hypo(4*(isrc-1)+4) = thypo
+               ! get the optimal hypocenter back on the master
+               IF (myblockID == master) THEN
+                  IF (ioptBlock /= myblockID) THEN
+print *, 'receiving from:', ioptBlock
+                     CALL MPI_RECV(hypo4, 4, MPI_DOUBLE_PRECISION,   &
+                                   ioptBlock, MPI_ANY_TAG, intra_node_comm, stat, &
+                                   mpierr)
+                  ENDIF
+                  hypo(4*(isrc-1)+1:4*(isrc-1)+4) = hypo4(1:4)
+print *, hypo4
+               ELSE
+                  IF (ioptBlock == myblockID) THEN
+                     CALL MPI_SEND(hypo4, 4, MPI_DOUBLE_PRECISION, master,       &
+                                   ioptBlock, intra_node_comm, mpierr)
+                  ENDIF
+               ENDIF
             ENDIF
     1    CONTINUE ! loop on sources
       ! locate many sources
