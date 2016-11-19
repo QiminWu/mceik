@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <math.h>
+#include <omp.h>
 
 #define memory_isAligned(POINTER, BYTE_COUNT) \
     (((uintptr_t)(const void *)(POINTER)) % (BYTE_COUNT) == 0)
@@ -30,7 +31,7 @@ int locate_l2_gridSearch__float64(const int ldgrd,
                                   const float *__restrict__ test,
                                   float *__restrict__ t0, 
                                   float *__restrict__ objfn);
-int locate_l1_gridSearch__double64(const int ldobs,
+int locate_l1_gridSearch__double64(const int ldgrd,
                                    const int ngrd,
                                    const int nobs,
                                    const int iwantOT,
@@ -82,8 +83,8 @@ int locate_minLocDouble64(const int n, double *__restrict__ x);
 int locate_minLocFloat64(const int n, float *__restrict__ x);
 int memory_malloc__double(const int n, double **x);
 int memory_malloc__float(const int n, float **x);
-int memory_calloc__double(const int n, double **x);
-int memory_calloc__float(const int n, float **x);
+double *memory_calloc__double(const int n);
+float *memory_calloc__float(const int n);
 void makeTest(const int nx, const int ny, const int nz,
               const double dx, const double dy, const double dz,
               const double xsrc, const double ysrc, const double zsrc,
@@ -108,9 +109,9 @@ int main()
     dx = 1.e3;
     dy = 1.e3;
     dz = 1.e3;
-    nx = 145;
-    ny = 145;
-    nz = 55;
+    nx = 45;
+    ny = 45;
+    nz = 45;
     ngrd = nx*ny*nz;
     ldgrd = ngrd + 64 - ngrd%64;
     ixsrc = 12;
@@ -120,13 +121,13 @@ printf("true: %d\n", izsrc*nx*ny + iysrc*nx + ixsrc);
     xsrc = (double) ixsrc*dx;
     ysrc = (double) iysrc*dy;
     zsrc = (double) izsrc*dz;
-    memory_calloc__double(nobs, &xrec);
-    memory_calloc__double(nobs, &yrec);
-    memory_calloc__double(nobs, &zrec);
+    xrec = memory_calloc__double(nobs);
+    yrec = memory_calloc__double(nobs);
+    zrec = memory_calloc__double(nobs);
 
-    memory_calloc__double(nobs, &tobs);
-    memory_calloc__double(nobs, &varobs);
-    memory_calloc__double(nobs*ldgrd, &test);
+    tobs = memory_calloc__double(nobs);
+    varobs = memory_calloc__double(nobs);
+    test = memory_calloc__double(nobs*ldgrd);
     mask = (int *)calloc((size_t) nobs, sizeof(int));
     // Make the receiver locations
     for (iobs=0; iobs<nobs; iobs++)
@@ -152,8 +153,14 @@ printf("true: %d\n", izsrc*nx*ny + iysrc*nx + ixsrc);
             tobs[iobs] = tobs[iobs] + t0use;
         }
     }
-    memory_calloc__double(ngrd, &t0);
-    memory_calloc__double(ngrd, &objfn);
+    t0 = memory_calloc__double(ngrd);
+    objfn = memory_calloc__double(ngrd);
+    locate_l1_gridSearch__double64(ldgrd, ngrd, nobs, iwantOT,
+                                   t0use, mask, tobs, varobs,
+                                   test, t0, objfn);
+    iopt = locate_minLocDouble64(ngrd, objfn);
+    printf("l1 first estimate: %d %f\n", iopt, t0[iopt]);
+
     locate_l2_gridSearch__double64(ldgrd, ngrd, nobs, iwantOT, 
                                    t0use, mask, tobs, varobs,
                                    test, t0, objfn);
@@ -168,9 +175,9 @@ printf("true: %d\n", izsrc*nx*ny + iysrc*nx + ixsrc);
     free(t0);
     // Set the float problem
     t0use4 = (float) t0use;
-    memory_calloc__float(nobs, &tobs4);
-    memory_calloc__float(nobs, &varobs4);
-    memory_calloc__float(ldgrd*nobs, &test4);
+    tobs4 = memory_calloc__float(nobs);
+    varobs4 = memory_calloc__float(nobs);
+    test4 = memory_calloc__float(ldgrd*nobs);
     for (iobs=0; iobs<nobs; iobs++)
     {
         tobs4[iobs] = (float) tobs[iobs];
@@ -183,8 +190,8 @@ printf("true: %d\n", izsrc*nx*ny + iysrc*nx + ixsrc);
     free(test);
     free(tobs);
     free(varobs);
-    memory_calloc__float(ngrd, &objfn4);
-    memory_calloc__float(ngrd, &t04);
+    objfn4 = memory_calloc__float(ngrd);
+    t04 = memory_calloc__float(ngrd);
     locate_l2_gridSearch__float64(ldgrd, ngrd, nobs, iwantOT,
                                   t0use4, mask, tobs4, varobs4,  
                                   test4, t04, objfn4);
@@ -250,6 +257,7 @@ double makeObs(const double x, const double y, const double z,
     return tobs; 
 }
 
+//#pragma omp threadprivate (cmp_double_array, cmp_float_array)
 struct double2d_struct
 {
     double val;
@@ -267,7 +275,7 @@ struct float2d_struct
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wcast-qual"
 #endif
-static int cmp_double_array(const void *x, const void *y)
+int cmp_double_array(const void *x, const void *y)
 {
     struct double2d_struct xx = *(struct double2d_struct *) x;
     struct double2d_struct yy = *(struct double2d_struct *) y;  
@@ -276,7 +284,7 @@ static int cmp_double_array(const void *x, const void *y)
     return 0;
 } 
 
-static int cmp_float_array(const void *x, const void *y) 
+int cmp_float_array(const void *x, const void *y) 
 {
     struct float2d_struct xx = *(struct float2d_struct *) x;
     struct float2d_struct yy = *(struct float2d_struct *) y;  
@@ -626,20 +634,30 @@ static void locate_l2_stackObjfn__float64(const int ngrd,
     return;
 }
 //============================================================================//
-int memory_calloc__double(const int n, double **x)
+double *memory_calloc__double(const int n)
 {
-    int ierr;
-    ierr = memory_malloc__double(n, x);
-    memset(*x, 0.0, (size_t) n*sizeof(double));
-    return ierr;
+    double *x = NULL;
+    int i, ierr;
+    ierr = memory_malloc__double(n, &x);
+    //memset(x, 0.0, (size_t) n*sizeof(double));
+    for (i=0; i<n; i++)
+    {
+        x[i] = 0.0;
+    }
+    return x; 
 }
 
-int memory_calloc__float(const int n, float **x)
+float *memory_calloc__float(const int n)
 {
-    int ierr;
-    ierr = memory_malloc__float(n, x);
-    memset(*x, 0.0f, (size_t) n*sizeof(float));
-    return ierr;
+    float *x = NULL;
+    int i, ierr;
+    ierr = memory_malloc__float(n, &x);
+    //memset(x, 0.0f, (size_t) n*sizeof(float));
+    for (i=0; i<n; i++)
+    {
+        x[i] = 0.0f;
+    }
+    return x;
 }
 
 int memory_malloc__double(const int n, double **x)
@@ -1120,7 +1138,7 @@ int locate_l2_gridSearch__float64(const int ldgrd,
     return ierr;
 }
 //============================================================================//
-int locate_l1_gridSearch__double64(const int ldgrd, //const int ldobs,
+int locate_l1_gridSearch__double64(const int ldgrd,
                                    const int ngrd,
                                    const int nobs,
                                    const int iwantOT,
@@ -1132,45 +1150,50 @@ int locate_l1_gridSearch__double64(const int ldgrd, //const int ldobs,
                                    double *__restrict__ t0,
                                    double *__restrict__ objfn)
 {
-    double *wt __attribute__ ((aligned(64)));
-    double *wtSort __attribute__ ((aligned(64)));
-    double *res __attribute__ ((aligned(64)));
-    double *resSort __attribute__ ((aligned(64)));
-    bool *lmask __attribute__ ((aligned(64)));
+    double *testPerm, *wt, *wtSort, *res, *resSort;
     double rsum __attribute__ ((aligned(64))) = 0.0; 
-    double wtres __attribute__ ((aligned(64))) = 0.0;
+    double t0opt __attribute__ ((aligned(64))) = 0.0;
     const double one __attribute__ ((aligned(64))) = 1.0;
     const double zero __attribute__ ((aligned(64))) = 0.0;
     double wtsum, wtsumi;
-    int *perm, ierr, igrd, iobs, indx, nobsUse, nsort;
+    int *perm, ierr, igrd, iobs, indx, jndx, jobs, ldobs, nobsUse, nsort;
     bool lsort;
 
     ierr = 0;
-    lmask = (bool *) calloc(nobs, sizeof(bool));
-    memory_calloc__double(nobs, &wt);
+    perm = (int *)calloc((size_t) nobs, sizeof(int));
+    wt = memory_calloc__double(nobs);
     wtsum = 0.0;
     nobsUse = 0;
     for (iobs=0; iobs<nobs; iobs++)
     {
-        if (mask[iobs] == 1)
-        {
-            lmask[iobs] = true;
-        }
-        else
+        if (mask[iobs] == 0)
         {
             wt[nobsUse] = one/varobs[iobs];
+            perm[nobsUse] = iobs;
             nobsUse = nobsUse + 1;
         }
         wtsum = wtsum + wt[iobs]; 
     }
+    ldobs = nobsUse + 8 - nobsUse%8;
+    testPerm = memory_calloc__double(ldobs*ngrd);
+    for (igrd=0; igrd<ngrd; igrd++)
+    {
+        for (iobs=0; iobs<nobsUse; iobs++)
+        {
+            jobs = perm[iobs];
+            indx = igrd*ldobs + iobs;
+            jndx = jobs*ldgrd + igrd;
+            testPerm[indx] = test[jndx];
+        }    
+    }
+
     locate_nullDouble64(ngrd, objfn);
     if (iwantOT == 1)
     {
         nsort = 0;
-        memory_calloc__double(nobsUse, &res);
-        memory_calloc__double(nobsUse, &resSort);
-        memory_calloc__double(nobsUse, &wtSort);
-        perm = (int *)calloc(nobsUse, sizeof(int));
+        res = memory_calloc__double(nobsUse);
+        resSort = memory_calloc__double(nobsUse);
+        wtSort = memory_calloc__double(nobsUse);
         // initialize the permutation
         for (iobs=0; iobs<nobs; iobs++)
         {
@@ -1188,38 +1211,51 @@ int locate_l1_gridSearch__double64(const int ldgrd, //const int ldobs,
         // Zero out the origin time
         locate_nullDouble64(ngrd, t0);
         // Loop on grid
+/*
+        #pragma omp parallel for default (none) \
+         firstprivate (perm, res, resSort, wtSort) \
+         private (ierr, igrd, indx, iobs, lsort, rsum, t0opt) \
+         shared (ldobs, nobsUse, objfn, wt, test, testPerm, t0, tobs) \
+         reduction(+:nsort)
+*/
         for (igrd=0; igrd<ngrd; igrd++)
         {
             // Compute the residuals in ascending order
             for (iobs=0; iobs<nobsUse; iobs++)
             {
-                indx = iobs*ldgrd + igrd; //igrd*ldobs + iobs;
-                res[iobs] = tobs[iobs] - test[indx]; 
+                //indx = iobs*ldgrd + igrd; 
+                //res[iobs] = tobs[iobs] - test[indx];
+                indx = igrd*ldobs + iobs;
+                res[iobs] = tobs[iobs] - testPerm[indx];
             }
+            t0opt = weightedMedian__double(nobsUse, res,
+                                           wt, perm, &lsort, &ierr);
+/*
             // Sort?
-            for (iobs=0; iobs<nobs; iobs++)
-            {
-                resSort[iobs] = res[iobs]; //res[perm[iobs]];
-                wtSort[iobs] = wt[iobs]; //wt[perm[iobs]];
-            }
-            // Optimize weighted median for origin time
-            t0[igrd] = weightedMedian__double(nobsUse, resSort,
-                                              wtSort, perm, &lsort, &ierr);
-//for (iobs=0; iobs<nobs; iobs++){printf("%d\n", perm[iobs]);}
-//getchar();
-            if (lsort){nsort = nsort + 1;}
-            // Compute L1 norm
             for (iobs=0; iobs<nobsUse; iobs++)
             {
-                indx = iobs*ldgrd + igrd; //igrd*ldobs + iobs;
-                objfn[igrd] = objfn[igrd]
-                            + wt[iobs]*fabs(tobs[iobs] - test[indx] - t0[igrd]);
+                //resSort[iobs] = res[perm[iobs]];
+                //wtSort[iobs] = wt[perm[iobs]];
+                resSort[iobs] = res[iobs];
+                wtSort[iobs] = wt[iobs];
+            }
+            // Optimize weighted median for origin time
+            t0opt = weightedMedian__double(nobsUse, resSort,
+                                           wtSort, perm, &lsort, &ierr);
+            if (lsort){nsort = nsort + 1;}
+*/
+            // Compute L1 norm
+            rsum = zero;
+            for (iobs=0; iobs<nobsUse; iobs++)
+            {
+                rsum = rsum + wt[iobs]*fabs(res[iobs] - t0opt);
             } 
+            objfn[igrd] = rsum;
+            t0[igrd] = t0opt;
         }
         free(res);
         free(resSort);
         free(wtSort);
-        free(perm);
     }
     else
     {
@@ -1233,13 +1269,16 @@ int locate_l1_gridSearch__double64(const int ldgrd, //const int ldobs,
             rsum = zero;
             for (iobs=0; iobs<nobsUse; iobs++)
             {
-                indx = iobs*ldgrd + igrd; //igrd*ldobs + iobs;
-                rsum = rsum + wt[iobs]*fabs(tobs[iobs] - test[indx] - t0use);
+                //indx = iobs*ldgrd + igrd;
+                indx = igrd*ldobs + iobs;
+                rsum = rsum + wt[iobs]*fabs( tobs[iobs]
+                                           - testPerm[indx] - t0use);
             }
             objfn[igrd] = rsum;
         }
     }
+    free(testPerm);
     free(wt);
-    free(lmask);
+    free(perm);
     return ierr;
 }
